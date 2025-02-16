@@ -5,20 +5,21 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 import wandb
 
-# Initialize Weights & Biases
+
 wandb.init(
-    project="mnist-classifier",
-    mode="disabled",
+    project="greedy_learning_test_MNIST",
+    # mode="disabled",
     config={
         "epochs": 20,
         "batch_size": 64,
         "learning_rate": 0.001,
+        "log_steps": 200,
         "do_auxloss": True,
         "propagate_gradients": False,
     }
 )
 
-# Define the model
+
 class MNISTClassifier(nn.Module):
     def __init__(self, do_auxloss=False, propagate_gradients=True):
         super(MNISTClassifier, self).__init__()
@@ -57,7 +58,7 @@ class MNISTClassifier(nn.Module):
 
         return outputs
 
-# Training function with validation and wandb logging
+
 def train(model, train_loader, val_loader, optimizer, criterion, device, num_epochs=5):
     model.train()
     # wandb.watch(model, log="all")  # Log gradients and model parameters
@@ -77,17 +78,22 @@ def train(model, train_loader, val_loader, optimizer, criterion, device, num_epo
             loss.backward()
             optimizer.step()
 
-            # Validation step every 100 batches
-            if batch_idx % 100 == 0:
+            total_steps = epoch * len(train_loader) + batch_idx
+            if total_steps % wandb.config.log_steps == 0:
                 val_loss = validate(model, val_loader, criterion, device)
-                wandb.log({"Train Loss": loss.item(), "Batch": batch_idx, "Epoch": epoch + 1, "Val Loss": val_loss})
+                wandb.log({
+                    "Train Loss": loss.item(),
+                    "Steps": total_steps,
+                    "Batch": batch_idx,
+                    "Epoch": epoch + 1,
+                    "Val Loss": val_loss})
                 print(f"Epoch {epoch+1}, Batch {batch_idx}, Train Loss: {loss.item():.4f}, Val Loss: {val_loss:.4f}")
 
     # Save model checkpoint
     # torch.save(model.state_dict(), "mnist_model.pth")
     # wandb.save("mnist_model.pth")
 
-# Validation function
+
 def validate(model, val_loader, criterion, device):
     model.eval()
     val_loss = 0
@@ -105,7 +111,8 @@ def validate(model, val_loader, criterion, device):
     model.train()  # Switch back to training mode
     return val_loss
 
-# Load dataset
+
+# Dataset
 transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.1307,), (0.3081,))
@@ -119,7 +126,10 @@ val_loader = DataLoader(val_dataset, batch_size=1000, shuffle=False)
 
 # Training
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = MNISTClassifier(do_auxloss=wandb.config.do_auxloss, propagate_gradients=wandb.config.propagate_gradients).to(device)
+model = MNISTClassifier(
+    do_auxloss=wandb.config.do_auxloss,
+    propagate_gradients=wandb.config.propagate_gradients)
+model.to(device)
 optimizer = optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
 criterion = nn.CrossEntropyLoss()
 
