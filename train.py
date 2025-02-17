@@ -63,6 +63,7 @@ def train(model, train_loader, val_loader, optimizer, criterion, device, num_epo
     model.train()
     # wandb.watch(model, log="all")  # Log gradients and model parameters
 
+    train_loss, train_accuracy, train_accumulation_steps = 0, 0, 0
     for epoch in range(num_epochs):
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
@@ -78,25 +79,47 @@ def train(model, train_loader, val_loader, optimizer, criterion, device, num_epo
             loss.backward()
             optimizer.step()
 
+            train_loss += loss.item()
+            final_output = outputs[-1]  # only care about final classification performance
+            train_accuracy += get_accuracy(final_output, target)
+            train_accumulation_steps += 1
+
             total_steps = epoch * len(train_loader) + batch_idx
             if total_steps % wandb.config.log_steps == 0:
-                val_loss = validate(model, val_loader, criterion, device)
+                train_loss /= train_accumulation_steps
+                train_accuracy /=  train_accumulation_steps
+                val_loss, val_accuracy = validate(model, val_loader, criterion, device)
                 wandb.log({
-                    "Train Loss": loss.item(),
                     "Steps": total_steps,
-                    "Batch": batch_idx,
                     "Epoch": epoch + 1,
-                    "Val Loss": val_loss})
-                print(f"Epoch {epoch+1}, Batch {batch_idx}, Train Loss: {loss.item():.4f}, Val Loss: {val_loss:.4f}")
+                    "Batch": batch_idx,
+                    "Train Loss": train_loss,
+                    "Val Loss": val_loss,
+                    "Train Accuracy": train_accuracy,
+                    "Val Accuracy": val_accuracy,
+                })
+                print(f"Epoch {epoch+1}, Batch {batch_idx},"
+                      f" Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f},"
+                      f" Train Accuracy: {train_accuracy:.4f}, Val Accuracy: {val_accuracy:.4f}")
+                train_loss, train_accuracy, train_accumulation_steps = 0, 0, 0
 
     # Save model checkpoint
     # torch.save(model.state_dict(), "mnist_model.pth")
     # wandb.save("mnist_model.pth")
 
 
+def get_accuracy(output, target):
+    _, predicted = torch.max(output, dim=1)
+    correct = (predicted == target).sum().item()
+    total = target.size(0)
+    accuracy = correct / total
+    return accuracy
+
+
 def validate(model, val_loader, criterion, device):
     model.eval()
     val_loss = 0
+    val_accuracy = 0
     with torch.no_grad():
         for data, target in val_loader:
             data, target = data.to(device), target.to(device)
@@ -106,10 +129,12 @@ def validate(model, val_loader, criterion, device):
             loss = criterion(final_output, target)
 
             val_loss += loss.item()
+            val_accuracy += get_accuracy(final_output, target)
 
     val_loss /= len(val_loader)
+    val_accuracy /= len(val_loader)
     model.train()  # Switch back to training mode
-    return val_loss
+    return val_loss, val_accuracy
 
 
 # Dataset
