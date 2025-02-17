@@ -25,6 +25,8 @@ class MNISTClassifier(nn.Module):
         super(MNISTClassifier, self).__init__()
         self.do_auxloss = do_auxloss
         self.propagate_gradients = propagate_gradients
+        self.use_residuals = True
+        self.learned_residuals = True
 
         self.layers = nn.ModuleList([
             nn.Sequential(nn.Conv2d(1, 32, kernel_size=3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2)),   # 32 x 14 x 14
@@ -38,11 +40,35 @@ class MNISTClassifier(nn.Module):
             nn.Linear(128 * 3 * 3, 10)
         ])
 
+        self.residual_weights = [nn.Parameter(torch.randn(n)) for n in range(len(self.layers))]
+
     def forward(self, x):
         outputs = []
+        residuals = []
         for i, layer in enumerate(self.layers):
-            if i > 0 and not self.propagate_gradients:
+            if not self.propagate_gradients and i > 0:
                 x = x.detach()  # Detach if propagate_gradients is False
+
+            if self.use_residuals:
+                # print(i)
+                # print('x', x.shape)
+                # for residual in residuals:
+                #     print('res', residual.shape)
+
+                x_original = x
+                if residuals:
+                    if self.learned_residuals:
+                        weighted_residuals = []
+                        for residual, residual_weight in zip(residuals, self.residual_weights[i]):
+                            weighted_residual = residual * residual_weight
+                            weighted_residuals.append(weighted_residual)
+                        weighted_residuals = torch.stack(weighted_residuals, dim=0)
+                        residual = torch.mean(weighted_residuals, dim=0)
+                    else:
+                        residual = residuals[-1]  # pseudo-classic residuals
+                    x = x + residual
+
+                residuals.append(x_original)
 
             x = layer(x)
 
@@ -50,6 +76,21 @@ class MNISTClassifier(nn.Module):
                 x_reshaped = x.view(x.shape[0], -1)
                 output = self.classifiers[i](x_reshaped)
                 outputs.append(output)
+
+            if self.use_residuals and i < len(self.layers) - 1:  # last layer needs to prepare no residuals
+                propagated_residuals = []
+                for residual in residuals:  # propagate all residuals
+                    pooling = layer[-1]  # assumes pooling is last in layer
+                    conv = layer[0]  # assumes conv is first layer
+
+                    conv_in = conv.in_channels
+                    conv_out = conv.out_channels
+                    n_repeat = conv_out // conv_in
+
+                    propagated_residual = pooling(residual)
+                    propagated_residual = propagated_residual.repeat(1, n_repeat, 1, 1)
+                    propagated_residuals.append(propagated_residual)
+                residuals = propagated_residuals
 
         if not self.do_auxloss:  # only use last classifier layer
             x_reshaped = x.view(x.shape[0], -1)
