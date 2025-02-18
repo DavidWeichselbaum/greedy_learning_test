@@ -49,7 +49,7 @@ class MNISTClassifier(nn.Module):
 
             if self.use_residuals:
                 residuals.append(x)
-                if residuals:
+                if i > 0:
                     if self.learned_residuals:
                         weighted_residuals = []
                         for residual, residual_weight in zip(residuals, self.residual_weights[i]):
