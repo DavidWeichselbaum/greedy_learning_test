@@ -7,12 +7,12 @@ import wandb
 
 
 class MNISTClassifier(nn.Module):
-    def __init__(self, do_auxloss=False, propagate_gradients=True, use_residuals=False, learned_residuals=False):
+    def __init__(self, do_auxloss=False, propagate_gradients=True, use_residuals=False, random_project_residuals=False):
         super(MNISTClassifier, self).__init__()
         self.do_auxloss = do_auxloss
         self.propagate_gradients = propagate_gradients
         self.use_residuals = use_residuals
-        self.learned_residuals = learned_residuals
+        self.random_project_residuals = random_project_residuals
 
         self.layers = nn.ModuleList([
             nn.Sequential(
@@ -32,34 +32,37 @@ class MNISTClassifier(nn.Module):
             nn.Linear(128 * 3 * 3, 10)
         ])
 
-        self.residual_batchnorms = nn.ModuleList([
-            nn.BatchNorm2d(1),
-            nn.BatchNorm2d(32),
+        self.residual_residual_projections = nn.ParameterList([
+            nn.Parameter(torch.randn(1, 32), requires_grad=False),  # non trainable, random projections
+            nn.Parameter(torch.randn(32, 64), requires_grad=False),
+            nn.Parameter(torch.randn(64, 128), requires_grad=False),
+        ])
+        self.activation_residual_projections = nn.ParameterList([
+            nn.Parameter(torch.randn(32, 32), requires_grad=False),  # non trainable, random projections
+            nn.Parameter(torch.randn(64, 64), requires_grad=False),
+            nn.Parameter(torch.randn(128, 128), requires_grad=False),
         ])
 
-        self.residual_weights = nn.ParameterList([nn.Parameter(torch.ones(n))
-                                                  for n in range(1, len(self.layers)+1)])
+        self.residual_batchnorms = nn.ModuleList([
+            nn.BatchNorm2d(64),
+            nn.BatchNorm2d(128),
+        ])
+
+
 
     def forward(self, x):
         outputs = []
-        residuals = []
+
         for i, layer in enumerate(self.layers):
             if not self.propagate_gradients and i > 0:
                 x = x.detach()  # Detach if propagate_gradients is False
 
             if self.use_residuals:
-                residuals.append(x)
-                if i > 0:
-                    if self.learned_residuals:
-                        weighted_residuals = []
-                        for residual, residual_weight in zip(residuals, self.residual_weights[i]):
-                            weighted_residual = residual * residual_weight
-                            weighted_residuals.append(weighted_residual)
-                        weighted_residuals = torch.stack(weighted_residuals, dim=0)
-                        x = torch.mean(weighted_residuals, dim=0)  # includes input
-                    else:
-                        residual = residuals[-2]  # last one is the input. pseudo-classic residuals
-                        x = x + residual
+                if i == 0:
+                    residual = x.clone()
+                else:
+                    # print(x.shape, residual.shape)
+                    x = x + residual
 
             x = layer(x)
 
@@ -69,21 +72,34 @@ class MNISTClassifier(nn.Module):
                 outputs.append(output)
 
             if self.use_residuals and i < len(self.layers) - 1:  # last layer needs to prepare no residuals
-                propagated_residuals = []
-                for residual in residuals:  # propagate all residuals
-                    conv = layer[0]  # make sure those indices are correct
-                    pooling = layer[-1]
-                    bnorm = self.residual_batchnorms[i]
+                conv = layer[0]  # make sure those indices are correct
+                pooling = layer[-1]
+                residual_residual_projection = self.residual_residual_projections[i]
+                activation_residual_projection = self.activation_residual_projections[i]
+                # bnorm = self.residual_batchnorms[i]
 
-                    conv_in = conv.in_channels
-                    conv_out = conv.out_channels
-                    n_repeat = conv_out // conv_in
+                # print(residual.shape, residual_residual_projection.shape)
+                projected_residual = torch.einsum("bdwh,dc->bcwh", residual, residual_residual_projection)
+                projected_residual = pooling(projected_residual)
+                # print(projected_residual.shape)
+                # print(x.shape, activation_residual_projection.shape)
+                projected_activation = torch.einsum("bdwh,dc->bcwh", x, activation_residual_projection)
+                # print(projected_activation.shape)
+                residual = projected_residual + projected_activation
+                # new_residual = bnorm(new_residual)
 
-                    propagated_residual = pooling(residual)
-                    propagated_residual = bnorm(propagated_residual)
-                    propagated_residual = propagated_residual.repeat(1, n_repeat, 1, 1)
-                    propagated_residuals.append(propagated_residual)
-                residuals = propagated_residuals
+
+                # conv_in = conv.in_channels
+                # conv_out = conv.out_channels
+                # n_repeat = conv_out // conv_in
+
+                # propagated_residual = pooling(residual)
+                # print(propagated_residual.shape)
+                # propagated_residual = bnorm(propagated_residual)
+                # propagated_residual = propagated_residual.repeat(1, n_repeat, 1, 1)
+                # print(propagated_residual.shape)
+                # print()
+                # residual = propagated_residual
 
         if not self.do_auxloss:  # only use last classifier layer
             x_reshaped = x.view(x.shape[0], -1)
@@ -123,7 +139,6 @@ def train(model, train_loader, val_loader, optimizer, criterion, device, num_epo
                 train_loss /= train_accumulation_steps
                 train_accuracy /= train_accumulation_steps
                 val_loss, val_accuracy = validate(model, val_loader, criterion, device)
-                # print_residual_weights(model)
                 wandb.log({
                     "Steps": total_steps,
                     "Epoch": epoch + 1,
@@ -172,13 +187,6 @@ def validate(model, val_loader, criterion, device):
     return val_loss, val_accuracy
 
 
-def print_residual_weights(model):
-    if model.use_residuals and model.learned_residuals:
-        for i, param in enumerate(model.residual_weights):
-            print(f"Residual Weight {i}: {param.shape}")
-            print(param.data)
-
-
 if __name__ == "__main__":
     wandb.init(
         project="greedy_learning_test_MNIST",
@@ -192,7 +200,7 @@ if __name__ == "__main__":
             "do_auxloss": True,
             "propagate_gradients": False,
             "use_residuals": True,
-            "learned_residuals": True,
+            "random_project_residuals": True,
         }
     )
     torch.manual_seed(wandb.config["seed"])
@@ -215,7 +223,7 @@ if __name__ == "__main__":
         do_auxloss=wandb.config.do_auxloss,
         propagate_gradients=wandb.config.propagate_gradients,
         use_residuals=wandb.config.use_residuals,
-        learned_residuals=wandb.config.learned_residuals,
+        random_project_residuals=wandb.config.random_project_residuals
     )
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
