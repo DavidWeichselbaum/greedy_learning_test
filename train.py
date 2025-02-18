@@ -6,32 +6,24 @@ from torch.utils.data import DataLoader
 import wandb
 
 
-wandb.init(
-    project="greedy_learning_test_MNIST",
-    # mode="disabled",
-    config={
-        "epochs": 20,
-        "batch_size": 64,
-        "learning_rate": 0.001,
-        "log_steps": 200,
-        "do_auxloss": True,
-        "propagate_gradients": False,
-    }
-)
-
-
 class MNISTClassifier(nn.Module):
-    def __init__(self, do_auxloss=False, propagate_gradients=True):
+    def __init__(self, do_auxloss=False, propagate_gradients=True, use_residuals=False, learned_residuals=False):
         super(MNISTClassifier, self).__init__()
         self.do_auxloss = do_auxloss
         self.propagate_gradients = propagate_gradients
-        self.use_residuals = True
-        self.learned_residuals = True
+        self.use_residuals = use_residuals
+        self.learned_residuals = learned_residuals
 
         self.layers = nn.ModuleList([
-            nn.Sequential(nn.Conv2d(1, 32, kernel_size=3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2)),   # 32 x 14 x 14
-            nn.Sequential(nn.Conv2d(32, 64, kernel_size=3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2)),  # 64 x 7 x 7
-            nn.Sequential(nn.Conv2d(64, 128, kernel_size=3, padding=1), nn.ReLU(), nn.MaxPool2d(2, 2))  # 128 x 3 x 3
+            nn.Sequential(
+                nn.Conv2d(1, 32, kernel_size=3, padding=1),
+                nn.BatchNorm2d(32), nn.ReLU(), nn.MaxPool2d(2, 2)),   # 32 x 14 x 14
+            nn.Sequential(
+                nn.Conv2d(32, 64, kernel_size=3, padding=1),
+                nn.BatchNorm2d(64), nn.ReLU(), nn.MaxPool2d(2, 2)),  # 64 x 7 x 7
+            nn.Sequential(
+                nn.Conv2d(64, 128, kernel_size=3, padding=1),
+                nn.BatchNorm2d(128), nn.ReLU(), nn.MaxPool2d(2, 2))  # 128 x 3 x 3
         ])
 
         self.classifiers = nn.ModuleList([
@@ -40,7 +32,13 @@ class MNISTClassifier(nn.Module):
             nn.Linear(128 * 3 * 3, 10)
         ])
 
-        self.residual_weights = [nn.Parameter(torch.randn(n)) for n in range(len(self.layers))]
+        self.residual_batchnorms = nn.ModuleList([
+            nn.BatchNorm2d(1),
+            nn.BatchNorm2d(32),
+        ])
+
+        self.residual_weights = nn.ParameterList([nn.Parameter(torch.ones(n))
+                                                  for n in range(1, len(self.layers)+1)])
 
     def forward(self, x):
         outputs = []
@@ -50,12 +48,7 @@ class MNISTClassifier(nn.Module):
                 x = x.detach()  # Detach if propagate_gradients is False
 
             if self.use_residuals:
-                # print(i)
-                # print('x', x.shape)
-                # for residual in residuals:
-                #     print('res', residual.shape)
-
-                x_original = x
+                residuals.append(x)
                 if residuals:
                     if self.learned_residuals:
                         weighted_residuals = []
@@ -63,12 +56,10 @@ class MNISTClassifier(nn.Module):
                             weighted_residual = residual * residual_weight
                             weighted_residuals.append(weighted_residual)
                         weighted_residuals = torch.stack(weighted_residuals, dim=0)
-                        residual = torch.mean(weighted_residuals, dim=0)
+                        x = torch.mean(weighted_residuals, dim=0)  # includes input
                     else:
-                        residual = residuals[-1]  # pseudo-classic residuals
-                    x = x + residual
-
-                residuals.append(x_original)
+                        residual = residuals[-2]  # last one is the input. pseudo-classic residuals
+                        x = x + residual
 
             x = layer(x)
 
@@ -80,14 +71,16 @@ class MNISTClassifier(nn.Module):
             if self.use_residuals and i < len(self.layers) - 1:  # last layer needs to prepare no residuals
                 propagated_residuals = []
                 for residual in residuals:  # propagate all residuals
-                    pooling = layer[-1]  # assumes pooling is last in layer
-                    conv = layer[0]  # assumes conv is first layer
+                    conv = layer[0]  # make sure those indices are correct
+                    pooling = layer[-1]
+                    bnorm = self.residual_batchnorms[i]
 
                     conv_in = conv.in_channels
                     conv_out = conv.out_channels
                     n_repeat = conv_out // conv_in
 
                     propagated_residual = pooling(residual)
+                    propagated_residual = bnorm(propagated_residual)
                     propagated_residual = propagated_residual.repeat(1, n_repeat, 1, 1)
                     propagated_residuals.append(propagated_residual)
                 residuals = propagated_residuals
@@ -128,8 +121,9 @@ def train(model, train_loader, val_loader, optimizer, criterion, device, num_epo
             total_steps = epoch * len(train_loader) + batch_idx
             if total_steps % wandb.config.log_steps == 0:
                 train_loss /= train_accumulation_steps
-                train_accuracy /=  train_accumulation_steps
+                train_accuracy /= train_accumulation_steps
                 val_loss, val_accuracy = validate(model, val_loader, criterion, device)
+                # print_residual_weights(model)
                 wandb.log({
                     "Steps": total_steps,
                     "Epoch": epoch + 1,
@@ -178,25 +172,53 @@ def validate(model, val_loader, criterion, device):
     return val_loss, val_accuracy
 
 
-# Dataset
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.1307,), (0.3081,))
-])
+def print_residual_weights(model):
+    if model.use_residuals and model.learned_residuals:
+        for i, param in enumerate(model.residual_weights):
+            print(f"Residual Weight {i}: {param.shape}")
+            print(param.data)
 
-train_dataset = datasets.MNIST(root="./data", train=True, transform=transform, download=True)
-val_dataset = datasets.MNIST(root="./data", train=False, transform=transform, download=True)
 
-train_loader = DataLoader(train_dataset, batch_size=wandb.config.batch_size, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=1000, shuffle=False)
+if __name__ == "__main__":
+    wandb.init(
+        project="greedy_learning_test_MNIST",
+        mode="disabled",
+        config={
+            "epochs": 20,
+            "batch_size": 64,
+            "learning_rate": 0.001,
+            "log_steps": 200,
+            "seed": 42,
+            "do_auxloss": True,
+            "propagate_gradients": False,
+            "use_residuals": True,
+            "learned_residuals": True,
+        }
+    )
+    torch.manual_seed(wandb.config["seed"])
 
-# Training
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = MNISTClassifier(
-    do_auxloss=wandb.config.do_auxloss,
-    propagate_gradients=wandb.config.propagate_gradients)
-model.to(device)
-optimizer = optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
-criterion = nn.CrossEntropyLoss()
+    # Dataset
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
 
-train(model, train_loader, val_loader, optimizer, criterion, device, num_epochs=wandb.config.epochs)
+    train_dataset = datasets.MNIST(root="./data", train=True, transform=transform, download=True)
+    val_dataset = datasets.MNIST(root="./data", train=False, transform=transform, download=True)
+
+    train_loader = DataLoader(train_dataset, batch_size=wandb.config.batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=1000, shuffle=False)
+
+    # Training
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = MNISTClassifier(
+        do_auxloss=wandb.config.do_auxloss,
+        propagate_gradients=wandb.config.propagate_gradients,
+        use_residuals=wandb.config.use_residuals,
+        learned_residuals=wandb.config.learned_residuals,
+    )
+    model.to(device)
+    optimizer = optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
+    criterion = nn.CrossEntropyLoss()
+
+    train(model, train_loader, val_loader, optimizer, criterion, device, num_epochs=wandb.config.epochs)
