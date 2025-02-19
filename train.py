@@ -65,25 +65,46 @@ def get_accuracy(output, target):
     return accuracy
 
 
+def log_validation_bars(losses, accuracies):
+    output_labels = [f"Output {i+1}" for i in range(len(losses))]
+
+    losses_data = [[label, loss] for label, loss in zip(output_labels, losses)]
+    losses_table = wandb.Table(data=losses_data, columns=["Output", "Loss"])
+    losses_plot = wandb.plot.bar(losses_table, "Output", "Loss", title="Validation Losses for Each Output")
+
+    accuracies_data = [[label, acc] for label, acc in zip(output_labels, accuracies)]
+    accuracies_table = wandb.Table(data=accuracies_data, columns=["Output", "Accuracy"])
+    accuracies_plot = wandb.plot.bar(accuracies_table, "Output", "Accuracy", title="Validation Accuracies for Each Output")
+
+    wandb.log({"Validation Accuracies": accuracies_plot, "Validation Losses": losses_plot})
+
+
 def validate(model, val_loader, criterion, device):
+    val_losses = []
+    val_accuracies = []
     model.eval()
-    val_loss = 0
-    val_accuracy = 0
     with torch.no_grad():
         for data, target in val_loader:
             data, target = data.to(device), target.to(device)
             outputs = model(data)
 
-            final_output = outputs[-1]  # only care about final classification performance
-            loss = criterion(final_output, target)
+            if not val_losses:
+                val_losses = [[] for _ in range(len(outputs))]
+                val_accuracies = [[] for _ in range(len(outputs))]
 
-            val_loss += loss.item()
-            val_accuracy += get_accuracy(final_output, target)
+            for i, output in enumerate(outputs):
+                loss = criterion(output, target)
+                val_losses[i].append(loss.item())
+                val_accuracies[i].append(get_accuracy(output, target))
+    model.train()
 
-    val_loss /= len(val_loader)
-    val_accuracy /= len(val_loader)
-    model.train()  # Switch back to training mode
-    return val_loss, val_accuracy
+    avg_val_losses = [sum(losses) / len(losses) for losses in val_losses]
+    avg_val_accuracies = [sum(accs) / len(accs) for accs in val_accuracies]
+
+    if len(avg_val_losses) > 1:
+        log_validation_bars(avg_val_losses, avg_val_accuracies)
+
+    return avg_val_losses[-1], avg_val_accuracies[-1]
 
 
 def run():
@@ -115,8 +136,8 @@ def run():
 
 if __name__ == "__main__":
     wandb.init(
-        mode="disabled",
-        project="greedy_learning_test_MNIST",
+        # mode="disabled",
+        project="greedy_learning_test_CIFAR10",
         name="test",
         config={
             "epochs": 20,
