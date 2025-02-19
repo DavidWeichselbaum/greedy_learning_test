@@ -5,86 +5,7 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 import wandb
 
-
-class MNISTClassifier(nn.Module):
-    def __init__(self, do_auxloss=False, propagate_gradients=True, use_residuals=False):
-        super(MNISTClassifier, self).__init__()
-        self.do_auxloss = do_auxloss
-        self.propagate_gradients = propagate_gradients
-        self.use_residuals = use_residuals
-
-        self.layers = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv2d(1, 32, kernel_size=3, padding=1),
-                nn.BatchNorm2d(32), nn.ReLU(), nn.MaxPool2d(2, 2)),   # 32 x 14 x 14
-            nn.Sequential(
-                nn.Conv2d(32, 64, kernel_size=3, padding=1),
-                nn.BatchNorm2d(64), nn.ReLU(), nn.MaxPool2d(2, 2)),  # 64 x 7 x 7
-            nn.Sequential(
-                nn.Conv2d(64, 128, kernel_size=3, padding=1),
-                nn.BatchNorm2d(128), nn.ReLU(), nn.MaxPool2d(2, 2))  # 128 x 3 x 3
-        ])
-
-        self.classifiers = nn.ModuleList([
-            nn.Linear(32 * 14 * 14, 10),
-            nn.Linear(64 * 7 * 7, 10),
-            nn.Linear(128 * 3 * 3, 10)
-        ])
-
-        self.residual_residual_projections = nn.ParameterList([
-            nn.Parameter(torch.randn(1, 32), requires_grad=False),  # non trainable, random projections
-            nn.Parameter(torch.randn(32, 64), requires_grad=False),
-            nn.Parameter(torch.randn(64, 128), requires_grad=False),
-        ])
-        self.activation_residual_projections = nn.ParameterList([
-            nn.Parameter(torch.randn(32, 32), requires_grad=False),  # non trainable, random projections
-            nn.Parameter(torch.randn(64, 64), requires_grad=False),
-            nn.Parameter(torch.randn(128, 128), requires_grad=False),
-        ])
-
-        self.residual_batchnorms = nn.ModuleList([
-            nn.BatchNorm2d(32),
-            nn.BatchNorm2d(64),
-        ])
-
-    def forward(self, x):
-        outputs = []
-
-        for i, layer in enumerate(self.layers):
-            if not self.propagate_gradients and i > 0:
-                x = x.detach()  # Detach if propagate_gradients is False
-
-            if self.use_residuals:
-                if i == 0:
-                    residual = x.clone()
-                else:
-                    x = x + residual
-
-            x = layer(x)
-
-            if self.do_auxloss:  # use all classifier layers
-                x_reshaped = x.view(x.shape[0], -1)
-                output = self.classifiers[i](x_reshaped)
-                outputs.append(output)
-
-            if self.use_residuals and i < len(self.layers) - 1:  # last layer needs to prepare no residuals
-                pooling = layer[-1]
-                residual_residual_projection = self.residual_residual_projections[i]
-                activation_residual_projection = self.activation_residual_projections[i]
-                bnorm = self.residual_batchnorms[i]
-
-                projected_residual = torch.einsum("bdwh,dc->bcwh", residual, residual_residual_projection)
-                projected_residual = pooling(projected_residual)
-                projected_activation = torch.einsum("bdwh,dc->bcwh", x, activation_residual_projection)
-                residual = projected_residual + projected_activation
-                residual = bnorm(residual)
-
-        if not self.do_auxloss:  # only use last classifier layer
-            x_reshaped = x.view(x.shape[0], -1)
-            output = self.classifiers[-1](x_reshaped)
-            outputs.append(output)
-
-        return outputs
+from model import GreedyClassifier
 
 
 def train(model, train_loader, val_loader, optimizer, criterion, device, num_epochs=5):
@@ -165,10 +86,38 @@ def validate(model, val_loader, criterion, device):
     return val_loss, val_accuracy
 
 
+def run():
+    # Dataset
+    transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomCrop(32, padding=4),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616))
+    ])
+    train_dataset = datasets.CIFAR10(root="./data", train=True, transform=transform, download=True)
+    val_dataset = datasets.CIFAR10(root="./data", train=False, transform=transform, download=True)
+    train_loader = DataLoader(train_dataset, batch_size=wandb.config.batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=1000, shuffle=False)
+
+    # Training
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = GreedyClassifier(
+        do_auxloss=wandb.config.do_auxloss,
+        propagate_gradients=wandb.config.propagate_gradients,
+        use_residuals=wandb.config.use_residuals,
+    )
+    model.to(device)
+    optimizer = optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
+    criterion = nn.CrossEntropyLoss()
+
+    train(model, train_loader, val_loader, optimizer, criterion, device, num_epochs=wandb.config.epochs)
+
+
 if __name__ == "__main__":
     wandb.init(
-        project="greedy_learning_test_MNIST",
         mode="disabled",
+        project="greedy_learning_test_MNIST",
+        name="test",
         config={
             "epochs": 20,
             "batch_size": 64,
@@ -181,28 +130,4 @@ if __name__ == "__main__":
         }
     )
     torch.manual_seed(wandb.config["seed"])
-
-    # Dataset
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
-
-    train_dataset = datasets.MNIST(root="./data", train=True, transform=transform, download=True)
-    val_dataset = datasets.MNIST(root="./data", train=False, transform=transform, download=True)
-
-    train_loader = DataLoader(train_dataset, batch_size=wandb.config.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=1000, shuffle=False)
-
-    # Training
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = MNISTClassifier(
-        do_auxloss=wandb.config.do_auxloss,
-        propagate_gradients=wandb.config.propagate_gradients,
-        use_residuals=wandb.config.use_residuals,
-    )
-    model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
-    criterion = nn.CrossEntropyLoss()
-
-    train(model, train_loader, val_loader, optimizer, criterion, device, num_epochs=wandb.config.epochs)
+    run()
