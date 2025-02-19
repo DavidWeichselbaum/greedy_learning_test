@@ -7,12 +7,11 @@ import wandb
 
 
 class MNISTClassifier(nn.Module):
-    def __init__(self, do_auxloss=False, propagate_gradients=True, use_residuals=False, random_project_residuals=False):
+    def __init__(self, do_auxloss=False, propagate_gradients=True, use_residuals=False):
         super(MNISTClassifier, self).__init__()
         self.do_auxloss = do_auxloss
         self.propagate_gradients = propagate_gradients
         self.use_residuals = use_residuals
-        self.random_project_residuals = random_project_residuals
 
         self.layers = nn.ModuleList([
             nn.Sequential(
@@ -44,11 +43,9 @@ class MNISTClassifier(nn.Module):
         ])
 
         self.residual_batchnorms = nn.ModuleList([
+            nn.BatchNorm2d(32),
             nn.BatchNorm2d(64),
-            nn.BatchNorm2d(128),
         ])
-
-
 
     def forward(self, x):
         outputs = []
@@ -61,7 +58,6 @@ class MNISTClassifier(nn.Module):
                 if i == 0:
                     residual = x.clone()
                 else:
-                    # print(x.shape, residual.shape)
                     x = x + residual
 
             x = layer(x)
@@ -72,34 +68,16 @@ class MNISTClassifier(nn.Module):
                 outputs.append(output)
 
             if self.use_residuals and i < len(self.layers) - 1:  # last layer needs to prepare no residuals
-                conv = layer[0]  # make sure those indices are correct
                 pooling = layer[-1]
                 residual_residual_projection = self.residual_residual_projections[i]
                 activation_residual_projection = self.activation_residual_projections[i]
-                # bnorm = self.residual_batchnorms[i]
+                bnorm = self.residual_batchnorms[i]
 
-                # print(residual.shape, residual_residual_projection.shape)
                 projected_residual = torch.einsum("bdwh,dc->bcwh", residual, residual_residual_projection)
                 projected_residual = pooling(projected_residual)
-                # print(projected_residual.shape)
-                # print(x.shape, activation_residual_projection.shape)
                 projected_activation = torch.einsum("bdwh,dc->bcwh", x, activation_residual_projection)
-                # print(projected_activation.shape)
                 residual = projected_residual + projected_activation
-                # new_residual = bnorm(new_residual)
-
-
-                # conv_in = conv.in_channels
-                # conv_out = conv.out_channels
-                # n_repeat = conv_out // conv_in
-
-                # propagated_residual = pooling(residual)
-                # print(propagated_residual.shape)
-                # propagated_residual = bnorm(propagated_residual)
-                # propagated_residual = propagated_residual.repeat(1, n_repeat, 1, 1)
-                # print(propagated_residual.shape)
-                # print()
-                # residual = propagated_residual
+                residual = bnorm(residual)
 
         if not self.do_auxloss:  # only use last classifier layer
             x_reshaped = x.view(x.shape[0], -1)
@@ -200,7 +178,6 @@ if __name__ == "__main__":
             "do_auxloss": True,
             "propagate_gradients": False,
             "use_residuals": True,
-            "random_project_residuals": True,
         }
     )
     torch.manual_seed(wandb.config["seed"])
@@ -223,7 +200,6 @@ if __name__ == "__main__":
         do_auxloss=wandb.config.do_auxloss,
         propagate_gradients=wandb.config.propagate_gradients,
         use_residuals=wandb.config.use_residuals,
-        random_project_residuals=wandb.config.random_project_residuals
     )
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
