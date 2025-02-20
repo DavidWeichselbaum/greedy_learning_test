@@ -74,7 +74,7 @@ class GreedyClassifier(nn.Module):
 
         for i, layer in enumerate(self.layers):
             if not self.propagate_gradients and i > 0:
-                x = x.detach()  # Detach if propagate_gradients is False
+                x = x.detach()  # Don't propagate gradients through layers
 
             if self.use_residuals:
                 if i == 0:
@@ -84,10 +84,11 @@ class GreedyClassifier(nn.Module):
 
             x = layer(x)
 
-            if self.do_auxloss:  # use all classifier layers
-                x_reshaped = x.view(x.shape[0], -1)
-                output = self.classifiers[i](x_reshaped)
-                outputs.append(output)
+            x_reshaped = x.view(x.shape[0], -1)
+            if not self.do_auxloss and i < len(self.layers) - 1:  #  Last classifier is needed in any case
+                x_reshaped = x_reshaped.detach()  # Don't propagate gradients from auxiliary classifiers (use as linear probes)
+            output = self.classifiers[i](x_reshaped)
+            outputs.append(output)
 
             if self.use_residuals and i < len(self.layers) - 1:  # last layer needs to prepare no residuals
                 pooling = None
@@ -103,10 +104,5 @@ class GreedyClassifier(nn.Module):
                 projected_activation = torch.einsum("bdwh,dc->bcwh", x, activation_residual_projection)
                 residual = projected_residual + projected_activation
                 residual = bnorm(residual)
-
-        if not self.do_auxloss:  # only use last classifier layer
-            x_reshaped = x.view(x.shape[0], -1)
-            output = self.classifiers[-1](x_reshaped)
-            outputs.append(output)
 
         return outputs

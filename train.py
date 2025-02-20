@@ -21,12 +21,26 @@ def train(model, train_loader, val_loader, optimizer, criterion, device, num_epo
 
             outputs = model(data)
 
-            loss = 0
-            for output in outputs:
-                loss += criterion(output, target)
-            loss = loss / len(outputs)
+            if model.do_auxloss:
+                loss = 0
+                for output in outputs:
+                    loss += criterion(output, target)
+                loss = loss / len(outputs)
 
-            loss.backward()
+                loss.backward()
+            else:  # linear probes
+                classifier_output = outputs[-1]
+                probe_outputs = outputs[:-1]
+
+                loss = criterion(classifier_output, target)
+                loss.backward()
+
+                probe_loss = 0
+                for output in probe_outputs:
+                    probe_loss += criterion(output, target)
+                probe_loss = probe_loss / len(probe_outputs)
+                probe_loss.backward()
+
             optimizer.step()
 
             train_loss += loss.item()
@@ -138,18 +152,18 @@ def run():
 
 if __name__ == "__main__":
     wandb.init(
-        mode="disabled",
+        # mode="disabled",
         project="greedy_learning_test_CIFAR10",
-        name="test",
+        name="test_-auxloss_+gradients_-residuals",
         config={
             "epochs": 20,
             "batch_size": 64,
             "learning_rate": 0.001,
             "log_steps": 200,
             "seed": 42,
-            "do_auxloss": True,
-            "propagate_gradients": False,
-            "use_residuals": True,
+            "do_auxloss": False,
+            "propagate_gradients": True,
+            "use_residuals": False,
         }
     )
     torch.manual_seed(wandb.config["seed"])
