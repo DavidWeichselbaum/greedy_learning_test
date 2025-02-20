@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
+from torchsummary import summary
 import wandb
 
 from model import GreedyClassifier
@@ -130,13 +131,14 @@ def run():
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
     criterion = nn.CrossEntropyLoss()
+    summary(model, input_size=(3, 32, 32))
 
     train(model, train_loader, val_loader, optimizer, criterion, device, num_epochs=wandb.config.epochs)
 
 
 if __name__ == "__main__":
     wandb.init(
-        # mode="disabled",
+        mode="disabled",
         project="greedy_learning_test_CIFAR10",
         name="test",
         config={

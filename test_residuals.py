@@ -1,18 +1,15 @@
 import itertools
 import random
+from time import sleep
 
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
 import wandb
 
 from train import run
 
 
 PROJECT_NAME = "greedy_learning_test_CIFAR10"
-TEST_NAME = "rand-res_v3"
+TEST_NAME = "test_big_resid"
 N_REPEATS = 20
 FIXED_PARAMS = {
     "epochs": 20,
@@ -23,7 +20,7 @@ FIXED_PARAMS = {
 TEST_PARAMS = {
     "do_auxloss": [True, False],
     "propagate_gradients": [True, False],
-    "use_residuals": [True, False],
+    "use_residuals": [True],
 }
 TEST_PARAMS_combinations = [
     dict(zip(TEST_PARAMS.keys(), values))
@@ -32,9 +29,9 @@ TEST_PARAMS_combinations = [
 
 
 def run_test(config, repeat, project_name, test_name):
-    group = f"{test_name}_{'+auxloss' if config['do_auxloss'] else '-auxloss'}_" \
-            f"{'+gradients' if config['propagate_gradients'] else '-gradients'}_" \
-            f"{'+residuals' if config['use_residuals'] else '-residuals'}_"
+    group = f"{test_name}_{'+auxloss' if config['do_auxloss'] else '-auxloss'}" \
+            f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \
+            f"_{'+resid' if config['use_residuals'] else '-resid'}"
     name = f"{group}_run-{repeat}"
 
     wandb.init(
@@ -55,5 +52,8 @@ if __name__ == "__main__":
         for i, test_params in enumerate(TEST_PARAMS_combinations):
             config = {**FIXED_PARAMS, **test_params, "seed": random.randint(0, 10000)}
             print(f"Test {i}, repeat {repeat}: {config}")
-
-            run_test(config, repeat, PROJECT_NAME, TEST_NAME)
+            try:
+                run_test(config, repeat, PROJECT_NAME, TEST_NAME)
+            except KeyboardInterrupt:
+                sleep(0.5)  # allow for killing
+                print("Skipped")
