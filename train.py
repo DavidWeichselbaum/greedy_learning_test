@@ -9,7 +9,7 @@ import wandb
 from model import GreedyClassifier
 
 
-def train(model, train_loader, val_loader, optimizer, criterion, device, num_epochs=5):
+def train(model, train_loader, val_loader, optimizers, criterion, device, num_epochs=5):
     model.train()
     # wandb.watch(model, log="all")  # Log gradients and model parameters
 
@@ -17,34 +17,20 @@ def train(model, train_loader, val_loader, optimizer, criterion, device, num_epo
     for epoch in range(num_epochs):
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
-            optimizer.zero_grad()
+
+            for optimizer in optimizers:
+                optimizer.zero_grad()
 
             outputs = model(data)
 
-            if model.do_auxloss:
-                loss = 0
-                for output in outputs:
-                    loss += criterion(output, target)
-                loss = loss / len(outputs)
-
+            for i, (output, optimizer) in enumerate(zip(outputs, optimizers)):
+                loss = criterion(output, target)
                 loss.backward()
-            else:  # linear probes
-                classifier_output = outputs[-1]
-                probe_outputs = outputs[:-1]
+                optimizer.step()
 
-                loss = criterion(classifier_output, target)
-                loss.backward()
-
-                probe_loss = 0
-                for output in probe_outputs:
-                    probe_loss += criterion(output, target)
-                probe_loss = probe_loss / len(probe_outputs)
-                probe_loss.backward()
-
-            optimizer.step()
-
-            train_loss += loss.item()
+            train_loss += loss.item()  # only care about last loss
             final_output = outputs[-1]  # only care about final classification performance
+
             train_accuracy += get_accuracy(final_output, target)
             train_accumulation_steps += 1
 
@@ -143,18 +129,35 @@ def run():
         use_residuals=wandb.config.use_residuals,
     )
     model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
-    criterion = nn.CrossEntropyLoss()
     summary(model, input_size=(3, 32, 32))
 
-    train(model, train_loader, val_loader, optimizer, criterion, device, num_epochs=wandb.config.epochs)
+    optimizers = []
+    for i, (layer, classifier) in enumerate(zip(model.layers, model.classifiers)):
+        print(f"Layer {i+1}")
+        if not model.do_auxloss and i == len(model.layers) - 1:  # final classifier. if no auxloss, last optimizers gets all layers and last classifier
+            parameters = list(model.layers.parameters()) + list(model.classifiers[-1].parameters())
+            print(f"Parameters final classifier: {sum(p.numel() for p in parameters)}")
+        elif not model.do_auxloss:  # linear probes
+            parameters = list(classifier.parameters())
+            print(f"Parameters linear probe: {sum(p.numel() for p in parameters)}")
+        else:  #  auxiliary classifier. Gets all parameter of single layer
+            parameters = list(layer.parameters()) + list(classifier.parameters())
+            print(f"Parameters auxiliary classifier: {sum(p.numel() for p in parameters)}")
+
+        optimizer = optim.Adam(parameters, lr=wandb.config.learning_rate)
+        optimizers.append(optimizer)
+
+    criterion = nn.CrossEntropyLoss()
+
+    train(model, train_loader, val_loader, optimizers, criterion, device, num_epochs=wandb.config.epochs)
 
 
 if __name__ == "__main__":
     wandb.init(
         # mode="disabled",
         project="greedy_learning_test_CIFAR10",
-        name="test_-auxloss_+gradients_-residuals",
+        group="test_separate_optimizers",
+        name="test_v6-auxloss_+gradients_-residuals",
         config={
             "epochs": 20,
             "batch_size": 64,
