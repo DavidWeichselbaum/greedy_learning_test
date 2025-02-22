@@ -178,16 +178,16 @@ if __name__ == "__main__":
         # mode="disabled",
         project="greedy_learning_test_CIFAR10",
         # group="test",
-        name="test_-auxloss_+gradients_regularResiduals",
+        name="test_-auxloss_-gradients_randomResiduals_detach",
         config={
             "epochs": 20,
             "batch_size": 64,
             "learning_rate": 0.001,
             "log_steps": 200,
             "seed": 42,
-            "do_auxloss": True,
+            "do_auxloss": False,
             "propagate_gradients": False,
-            "residual_mode": "regular",
+            "residual_mode": "random",
         }
     )
     torch.manual_seed(wandb.config["seed"])

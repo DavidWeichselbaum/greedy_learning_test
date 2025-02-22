@@ -100,10 +100,13 @@ class GreedyClassifier(nn.Module):
 
     def forward(self, x):
         outputs = []
+        residual = None
 
         for i, layer in enumerate(self.layers):
             if not self.propagate_gradients and i > 0:
                 x = x.detach()  # Don't propagate gradients through layers
+                if residual is not None:
+                    residual = residual.detach()
 
             if self.residual_mode:
                 layer_input = x
