@@ -162,7 +162,7 @@ def run():
     model = GreedyClassifier(
         do_auxloss=wandb.config.do_auxloss,
         propagate_gradients=wandb.config.propagate_gradients,
-        use_residuals=wandb.config.use_residuals,
+        residual_mode=wandb.config.residual_mode,
     )
     model.to(device)
     summary(model, input_size=(3, 32, 32))
@@ -177,8 +177,8 @@ if __name__ == "__main__":
     wandb.init(
         # mode="disabled",
         project="greedy_learning_test_CIFAR10",
-        group="test",
-        name="test4_-auxloss_+gradients_-residuals",
+        # group="test",
+        name="test_-auxloss_+gradients_regularResiduals",
         config={
             "epochs": 20,
             "batch_size": 64,
@@ -187,7 +187,7 @@ if __name__ == "__main__":
             "seed": 42,
             "do_auxloss": True,
             "propagate_gradients": False,
-            "use_residuals": False,
+            "residual_mode": "regular",
         }
     )
     torch.manual_seed(wandb.config["seed"])
