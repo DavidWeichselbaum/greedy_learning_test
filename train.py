@@ -18,23 +18,19 @@ def train(model, train_loader, val_loader, optimizers, criterion, device, num_ep
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
 
-            for optimizer in optimizers:
-                optimizer.zero_grad()
-
             outputs = model(data)
 
             for i, (output, optimizer) in enumerate(zip(outputs, optimizers)):
+                optimizer.zero_grad()
                 loss = criterion(output, target)
                 loss.backward()
                 optimizer.step()
 
             train_loss += loss.item()  # only care about last loss
-            final_output = outputs[-1]  # only care about final classification performance
-
-            train_accuracy += get_accuracy(final_output, target)
-            train_accumulation_steps += 1
+            train_accuracy += get_accuracy(output, target)  # only care about final classification performance
 
             total_steps = epoch * len(train_loader) + batch_idx
+            train_accumulation_steps += 1
             if total_steps % wandb.config.log_steps == 0:
                 train_loss /= train_accumulation_steps
                 train_accuracy /= train_accumulation_steps
@@ -156,16 +152,16 @@ if __name__ == "__main__":
     wandb.init(
         # mode="disabled",
         project="greedy_learning_test_CIFAR10",
-        group="test_separate_optimizers",
-        name="test_v6-auxloss_+gradients_-residuals",
+        group="test",
+        name="test2_+auxloss_-gradients_-residuals",
         config={
             "epochs": 20,
             "batch_size": 64,
             "learning_rate": 0.001,
             "log_steps": 200,
             "seed": 42,
-            "do_auxloss": False,
-            "propagate_gradients": True,
+            "do_auxloss": True,
+            "propagate_gradients": False,
             "use_residuals": False,
         }
     )
