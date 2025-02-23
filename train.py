@@ -47,7 +47,11 @@ def train(model, train_loader, val_loader, optimizers, criterion, device, num_ep
             if total_steps % wandb.config.log_steps == 0:
                 train_loss /= train_accumulation_steps
                 train_accuracy /= train_accumulation_steps
+
                 val_loss, val_accuracy, outputs_df = validate(model, val_loader, criterion, device, total_steps, outputs_df)
+                if not model.propagate_gradients:
+                    compare_gradients(model, val_loader, device, criterion)
+
                 wandb.log({
                     "Steps": total_steps,
                     "Epoch": epoch + 1,
@@ -110,6 +114,7 @@ def log_outputs_plot(total_steps, losses, accuracies):
 def validate(model, val_loader, criterion, device, total_steps, outputs_df):
     val_losses = []
     val_accuracies = []
+
     model.eval()
     with torch.no_grad():
         for data, target in val_loader:
@@ -134,6 +139,59 @@ def validate(model, val_loader, criterion, device, total_steps, outputs_df):
         log_outputs_plot(total_steps, avg_val_losses, avg_val_accuracies)
 
     return avg_val_losses[-1], avg_val_accuracies[-1], outputs_df
+
+
+def compare_gradients(model, val_loader, device, criterion):
+    model.eval()
+    layer_types = {name: type(module).__name__ for name, module in model.named_modules()}
+
+    grads_backprop = {}
+    grads_no_backprop = {}
+    for data, target in val_loader:
+        data, target = data.to(device), target.to(device)
+
+        model.propagate_gradients = True
+        outputs = model(data)
+        model.propagate_gradients = False
+
+        final_output = outputs[-1]
+        loss = criterion(final_output, target)
+
+        model.zero_grad()
+        loss.backward()
+
+        for param_name, param in model.named_parameters():
+            if param.requires_grad and param.grad is not None:
+                grad = param.grad.clone()
+                grads_backprop[param_name] = grad
+
+
+        outputs = model(data)
+
+        model.zero_grad()
+        for i, output in enumerate(outputs):
+            loss = criterion(output, target)
+            loss.backward()
+
+        for param_name, param in model.named_parameters():
+            if param.requires_grad and param.grad is not None:
+                grad = param.grad.clone()
+                grads_no_backprop[param_name] = grad
+
+        for param_name in grads_backprop.keys():
+            grad_backprop = grads_backprop[param_name]
+            grad_no_backprop = grads_no_backprop[param_name]
+
+            cos_sim = torch.nn.functional.cosine_similarity(grad_no_backprop.view(-1), grad_backprop.view(-1), dim=0)
+            norm_ratio = grad_no_backprop.norm() / grad_backprop.norm()
+
+            layer_name = '.'.join(param_name.split('.')[:-1])  # Extract the layer name without "weight" or "bias"
+            layer_type = layer_types.get(layer_name, 'Unknown')
+
+            print(f"{param_name:>20}    {layer_type:>20}    cos sim: {cos_sim.item():.4f}    norm ratio: {norm_ratio.item():.4f}")
+
+        return  # only do one batch
+    model.train()
 
 
 def init_optimizers(model):
@@ -210,7 +268,7 @@ if __name__ == "__main__":
            f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \
            f"_resid={config['residual_mode']}"
     wandb.init(
-        # mode="disabled",
+        mode="disabled",
         project="greedy_learning_test_CIFAR10",
         group=name,
         name=name,
