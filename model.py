@@ -10,6 +10,9 @@ class GreedyClassifier(nn.Module):
         assert residual_mode in [None, "regular", "random"]
         self.residual_mode = residual_mode
 
+        self.do_linear_probes = self.propagate_gradients and not self.do_auxloss
+        self.do_deep_supervision = self.propagate_gradients and self.do_auxloss
+
         self.layers = nn.ModuleList([
             # Input: 3 x 32 x 32
             nn.Sequential(
@@ -119,7 +122,7 @@ class GreedyClassifier(nn.Module):
             x = layer(x)
 
             x_reshaped = x.view(x.shape[0], -1)
-            if not self.do_auxloss and i < len(self.layers) - 1:  #  Last classifier is needed in any case
+            if not self.do_linear_probes and i < len(self.layers) - 1:  #  Last classifier is needed in any case
                 x_reshaped = x_reshaped.detach()  # Don't propagate gradients from auxiliary classifiers (use as linear probes)
             output = self.classifiers[i](x_reshaped)
             outputs.append(output)

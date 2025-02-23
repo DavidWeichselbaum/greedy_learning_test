@@ -137,7 +137,7 @@ def validate(model, val_loader, criterion, device, total_steps, outputs_df):
 
 
 def init_optimizers(model):
-    if model.do_auxloss and model.propagate_gradients:
+    if model.do_deep_supervision:
         return init_global_optimizer(model)
     else:
         return init_separate_optimizers(model)
