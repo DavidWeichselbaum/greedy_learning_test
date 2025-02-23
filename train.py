@@ -145,38 +145,11 @@ def compare_gradients(model, val_loader, device, criterion):
     model.eval()
     layer_types = {name: type(module).__name__ for name, module in model.named_modules()}
 
-    grads_backprop = {}
-    grads_no_backprop = {}
     for data, target in val_loader:
         data, target = data.to(device), target.to(device)
 
-        model.propagate_gradients = True
-        outputs = model(data)
-        model.propagate_gradients = False
-
-        final_output = outputs[-1]
-        loss = criterion(final_output, target)
-
-        model.zero_grad()
-        loss.backward()
-
-        for param_name, param in model.named_parameters():
-            if param.requires_grad and param.grad is not None:
-                grad = param.grad.clone()
-                grads_backprop[param_name] = grad
-
-
-        outputs = model(data)
-
-        model.zero_grad()
-        for i, output in enumerate(outputs):
-            loss = criterion(output, target)
-            loss.backward()
-
-        for param_name, param in model.named_parameters():
-            if param.requires_grad and param.grad is not None:
-                grad = param.grad.clone()
-                grads_no_backprop[param_name] = grad
+        grads_backprop = get_backprop_grads(model, data, target, criterion)
+        grads_no_backprop = get_no_backprop_grads(model, data, target, criterion)
 
         for param_name in grads_backprop.keys():
             grad_backprop = grads_backprop[param_name]
@@ -192,6 +165,41 @@ def compare_gradients(model, val_loader, device, criterion):
 
         return  # only do one batch
     model.train()
+
+
+def get_backprop_grads(model, data, target, criterion):
+    model.propagate_gradients = True
+    outputs = model(data)
+    model.propagate_gradients = False
+
+    final_output = outputs[-1]
+    loss = criterion(final_output, target)
+
+    model.zero_grad()
+    loss.backward()
+
+    grads_backprop = {}
+    for param_name, param in model.named_parameters():
+        if param.requires_grad and param.grad is not None:
+            grad = param.grad.clone()
+            grads_backprop[param_name] = grad
+    return grads_backprop
+
+
+def get_no_backprop_grads(model, data, target, criterion):
+    outputs = model(data)
+
+    model.zero_grad()
+    for i, output in enumerate(outputs):
+        loss = criterion(output, target)
+        loss.backward()
+
+    grads_no_backprop = {}
+    for param_name, param in model.named_parameters():
+        if param.requires_grad and param.grad is not None:
+            grad = param.grad.clone()
+            grads_no_backprop[param_name] = grad
+    return grads_no_backprop
 
 
 def init_optimizers(model):
