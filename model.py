@@ -7,7 +7,8 @@ class GreedyClassifier(nn.Module):
         super(GreedyClassifier, self).__init__()
         self.do_auxloss = do_auxloss
         self.propagate_gradients = propagate_gradients
-        self.residual_mode = residual_mode  # regular, random, None
+        assert residual_mode in [None, "regular", "random"]
+        self.residual_mode = residual_mode
 
         self.layers = nn.ModuleList([
             # Input: 3 x 32 x 32

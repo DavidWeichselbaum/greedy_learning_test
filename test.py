@@ -1,26 +1,26 @@
 import itertools
 import random
-from time import sleep
 
 import torch
 import wandb
 
 from train import run
+from utils import get_commit_hash
 
 
 PROJECT_NAME = "greedy_learning_test_CIFAR10"
-TEST_NAME = "test_big_resid"
+TEST_NAME = "3-resid-modes"
 N_REPEATS = 20
 FIXED_PARAMS = {
-    "epochs": 20,
+    "epochs": 100,
     "batch_size": 64,
     "learning_rate": 0.001,
-    "log_steps": 200,
+    "log_steps": 500,
 }
 TEST_PARAMS = {
     "do_auxloss": [True, False],
     "propagate_gradients": [True, False],
-    "use_residuals": [True],
+    "residual_mode": [None, "regular", "random"]
 }
 TEST_PARAMS_combinations = [
     dict(zip(TEST_PARAMS.keys(), values))
@@ -31,7 +31,7 @@ TEST_PARAMS_combinations = [
 def run_test(config, repeat, project_name, test_name):
     group = f"{test_name}_{'+auxloss' if config['do_auxloss'] else '-auxloss'}" \
             f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \
-            f"_{'+resid' if config['use_residuals'] else '-resid'}"
+            f"_resid={config['residual_mode']}"
     name = f"{group}_run-{repeat}"
 
     wandb.init(
@@ -39,6 +39,7 @@ def run_test(config, repeat, project_name, test_name):
         project=project_name,
         group=group,
         name=name,
+        notes=get_commit_hash(),
         config=config,
         reinit=True,
     )
@@ -52,8 +53,4 @@ if __name__ == "__main__":
         for i, test_params in enumerate(TEST_PARAMS_combinations):
             config = {**FIXED_PARAMS, **test_params, "seed": random.randint(0, 10000)}
             print(f"Test {i}, repeat {repeat}: {config}")
-            try:
-                run_test(config, repeat, PROJECT_NAME, TEST_NAME)
-            except KeyboardInterrupt:
-                sleep(0.5)  # allow for killing
-                print("Skipped")
+            run_test(config, repeat, PROJECT_NAME, TEST_NAME)

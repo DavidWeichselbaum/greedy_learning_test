@@ -8,6 +8,7 @@ import wandb
 import pandas as pd
 
 from model import GreedyClassifier
+from utils import get_commit_hash
 
 
 def train(model, train_loader, val_loader, optimizers, criterion, device, num_epochs):
@@ -22,11 +23,21 @@ def train(model, train_loader, val_loader, optimizers, criterion, device, num_ep
 
             outputs = model(data)
 
-            for i, (output, optimizer) in enumerate(zip(outputs, optimizers)):
+            if model.do_auxloss and model.propagate_gradients:  # global optimizer
+                optimizer = optimizers[0]
                 optimizer.zero_grad()
-                loss = criterion(output, target)
+                loss = 0
+                for i, (output, optimizer) in enumerate(zip(outputs, optimizers)):
+                    loss += criterion(output, target)
+                loss /= len(outputs)
                 loss.backward()
                 optimizer.step()
+            else:  # separate optimizer for each auxiliary head or linear probe
+                for i, (output, optimizer) in enumerate(zip(outputs, optimizers)):
+                    optimizer.zero_grad()
+                    loss = criterion(output, target)
+                    loss.backward()
+                    optimizer.step()
 
             train_loss += loss.item()  # only care about last loss
             train_accuracy += get_accuracy(output, target)  # only care about final classification performance
@@ -126,6 +137,13 @@ def validate(model, val_loader, criterion, device, total_steps, outputs_df):
 
 
 def init_optimizers(model):
+    if model.do_auxloss and model.propagate_gradients:
+        return init_global_optimizer(model)
+    else:
+        return init_separate_optimizers(model)
+
+
+def init_separate_optimizers(model):
     optimizers = []
     for i, (layer, classifier) in enumerate(zip(model.layers, model.classifiers)):
         print(f"Layer {i+1}")
@@ -142,6 +160,11 @@ def init_optimizers(model):
         optimizer = optim.Adam(parameters, lr=wandb.config.learning_rate)
         optimizers.append(optimizer)
     return optimizers
+
+
+def init_global_optimizer(model):
+    optimizer = optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
+    return [optimizer]
 
 
 def run():
@@ -177,17 +200,18 @@ if __name__ == "__main__":
     wandb.init(
         # mode="disabled",
         project="greedy_learning_test_CIFAR10",
-        # group="test",
+        group="test",
         name="test_-auxloss_-gradients_randomResiduals_detach",
+        notes=get_commit_hash(),
         config={
             "epochs": 20,
             "batch_size": 64,
             "learning_rate": 0.001,
             "log_steps": 200,
             "seed": 42,
-            "do_auxloss": False,
-            "propagate_gradients": False,
-            "residual_mode": "random",
+            "do_auxloss": True,
+            "propagate_gradients": True,
+            "residual_mode": None,
         }
     )
     torch.manual_seed(wandb.config["seed"])
