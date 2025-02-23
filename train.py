@@ -23,11 +23,11 @@ def train(model, train_loader, val_loader, optimizers, criterion, device, num_ep
 
             outputs = model(data)
 
-            if model.do_auxloss and model.propagate_gradients:  # global optimizer
-                optimizer = optimizers[0]
+            if model.do_deep_supervision:  # global optimizer
+                optimizer = optimizers
                 optimizer.zero_grad()
                 loss = 0
-                for i, (output, optimizer) in enumerate(zip(outputs, optimizers)):
+                for i, output in enumerate(outputs):
                     loss += criterion(output, target)
                 loss /= len(outputs)
                 loss.backward()
@@ -150,7 +150,7 @@ def init_separate_optimizers(model):
         if not model.do_auxloss and i == len(model.layers) - 1:  # final classifier. if no auxloss, last optimizers gets all layers and last classifier
             parameters = list(model.layers.parameters()) + list(model.classifiers[-1].parameters())
             print(f"Parameters final classifier: {sum(p.numel() for p in parameters)}")
-        elif not model.do_auxloss:  # linear probes
+        elif model.do_linear_probes:  # linear probes
             parameters = list(classifier.parameters())
             print(f"Parameters linear probe: {sum(p.numel() for p in parameters)}")
         else:  #  auxiliary classifier. Gets all parameter of single layer
@@ -163,8 +163,7 @@ def init_separate_optimizers(model):
 
 
 def init_global_optimizer(model):
-    optimizer = optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
-    return [optimizer]
+    return optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
 
 
 def run():
@@ -197,22 +196,26 @@ def run():
 
 
 if __name__ == "__main__":
+    config={
+        "epochs": 20,
+        "batch_size": 64,
+        "learning_rate": 0.001,
+        "log_steps": 200,
+        "seed": 42,
+        "do_auxloss": True,
+        "propagate_gradients": False,
+        "residual_mode": None,
+    }
+    name = f"test_{'+auxloss' if config['do_auxloss'] else '-auxloss'}" \
+           f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \
+           f"_resid={config['residual_mode']}"
     wandb.init(
         # mode="disabled",
         project="greedy_learning_test_CIFAR10",
-        group="test",
-        name="test_-auxloss_-gradients_randomResiduals_detach",
+        group=name,
+        name=name,
         notes=get_commit_hash(),
-        config={
-            "epochs": 20,
-            "batch_size": 64,
-            "learning_rate": 0.001,
-            "log_steps": 200,
-            "seed": 42,
-            "do_auxloss": True,
-            "propagate_gradients": True,
-            "residual_mode": None,
-        }
+        config=config,
     )
     torch.manual_seed(wandb.config["seed"])
     run()
