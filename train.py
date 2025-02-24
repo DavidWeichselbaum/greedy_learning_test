@@ -13,6 +13,7 @@ from utils import get_commit_hash
 
 def train(model, train_loader, val_loader, optimizers, criterion, device, num_epochs):
     outputs_df = pd.DataFrame(columns=["Steps", "Output", "Val Loss", "Val Accuracy"])
+    gradients_df = pd.DataFrame(columns=["Steps", "Parameter", "Type", "Cosine Similarity", "Norm Ratio"])
     model.train()
     # wandb.watch(model, log="all")  # Log gradients and model parameters
 
@@ -50,7 +51,7 @@ def train(model, train_loader, val_loader, optimizers, criterion, device, num_ep
 
                 val_loss, val_accuracy, outputs_df = validate(model, val_loader, criterion, device, total_steps, outputs_df)
                 if not model.propagate_gradients:
-                    compare_gradients(model, val_loader, device, criterion)
+                    gradients_df = compare_gradients(model, val_loader, device, criterion, total_steps, gradients_df)
 
                 wandb.log({
                     "Steps": total_steps,
@@ -141,7 +142,7 @@ def validate(model, val_loader, criterion, device, total_steps, outputs_df):
     return avg_val_losses[-1], avg_val_accuracies[-1], outputs_df
 
 
-def compare_gradients(model, val_loader, device, criterion):
+def compare_gradients(model, val_loader, device, criterion, total_steps, gradients_df):
     model.eval()
     layer_types = {name: type(module).__name__ for name, module in model.named_modules()}
 
@@ -151,6 +152,7 @@ def compare_gradients(model, val_loader, device, criterion):
         grads_backprop = get_backprop_grads(model, data, target, criterion)
         grads_no_backprop = get_no_backprop_grads(model, data, target, criterion)
 
+        new_rows = []
         for param_name in grads_backprop.keys():
             grad_backprop = grads_backprop[param_name]
             grad_no_backprop = grads_no_backprop[param_name]
@@ -161,10 +163,22 @@ def compare_gradients(model, val_loader, device, criterion):
             layer_name = '.'.join(param_name.split('.')[:-1])  # Extract the layer name without "weight" or "bias"
             layer_type = layer_types.get(layer_name, 'Unknown')
 
-            print(f"{param_name:>20}    {layer_type:>20}    cos sim: {cos_sim.item():.4f}    norm ratio: {norm_ratio.item():.4f}")
+            new_row = {
+                "Steps": total_steps,
+                "Parameter": param_name,
+                "Layer Type": layer_type,
+                "Cosine Similarity": cos_sim,
+                "Norm Ratio": norm_ratio,
+            }
+            new_rows.append(new_row)
+        break  # only do one batch
 
-        return  # only do one batch
+    new_df = pd.DataFrame(new_rows)
+    gradients_df = pd.concat([gradients_df, new_df], ignore_index=True)
+    wandb.log({"Gradient Comparison": wandb.Table(dataframe=gradients_df), "Steps": total_steps})
+
     model.train()
+    return gradients_df
 
 
 def get_backprop_grads(model, data, target, criterion):
@@ -276,7 +290,7 @@ if __name__ == "__main__":
            f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \
            f"_resid={config['residual_mode']}"
     wandb.init(
-        mode="disabled",
+        # mode="disabled",
         project="greedy_learning_test_CIFAR10",
         group=name,
         name=name,
