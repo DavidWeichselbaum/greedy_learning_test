@@ -62,7 +62,7 @@ def train(model, train_loader, val_loader, optimizers, criterion, device, num_ep
                     "Train Accuracy": train_accuracy,
                     "Val Accuracy": val_accuracy,
                 })
-                print(f"Epoch {epoch+1}, Batch {batch_idx},"
+                print(f"Epoch {epoch+1}, Step {total_steps},"
                       f" Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f},"
                       f" Train Accuracy: {train_accuracy:.4f}, Val Accuracy: {val_accuracy:.4f}")
                 train_loss, train_accuracy, train_accumulation_steps = 0, 0, 0
@@ -153,7 +153,7 @@ def compare_gradients(model, val_loader, device, criterion, total_steps, gradien
         grads_no_backprop = get_no_backprop_grads(model, data, target, criterion)
 
         new_rows = []
-        for param_name in grads_backprop.keys():
+        for param_idx, param_name in enumerate(grads_backprop.keys()):
             grad_backprop = grads_backprop[param_name]
             grad_no_backprop = grads_no_backprop[param_name]
 
@@ -165,6 +165,7 @@ def compare_gradients(model, val_loader, device, criterion, total_steps, gradien
 
             new_row = {
                 "Steps": total_steps,
+                "Parameter Index": param_idx,
                 "Parameter": param_name,
                 "Layer Type": layer_type,
                 "Cosine Similarity": cos_sim,
