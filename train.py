@@ -266,6 +266,7 @@ def run():
         do_auxloss=wandb.config.do_auxloss,
         propagate_gradients=wandb.config.propagate_gradients,
         residual_mode=wandb.config.residual_mode,
+        classifier_mode=wandb.config.classifier_mode,
     )
     model.to(device)
     summary(model, input_size=(3, 32, 32))
@@ -286,12 +287,14 @@ if __name__ == "__main__":
         "do_auxloss": True,
         "propagate_gradients": False,
         "residual_mode": None,
+        "classifier_mode": "average",
     }
     name = f"test_{'+auxloss' if config['do_auxloss'] else '-auxloss'}" \
            f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \
-           f"_resid={config['residual_mode']}"
+           f"_resid={config['residual_mode']}" \
+           f"_classifier={config['classifier_mode']}"
     wandb.init(
-        # mode="disabled",
+        mode="disabled",
         project="greedy_learning_test_CIFAR10",
         group=name,
         name=name,

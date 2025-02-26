@@ -3,12 +3,14 @@ import torch.nn as nn
 
 
 class GreedyClassifier(nn.Module):
-    def __init__(self, do_auxloss=False, propagate_gradients=True, residual_mode=None):
+    def __init__(self, do_auxloss=False, propagate_gradients=True, residual_mode=None, classifier_mode="linear"):
         super(GreedyClassifier, self).__init__()
         self.do_auxloss = do_auxloss
         self.propagate_gradients = propagate_gradients
-        assert residual_mode in [None, "regular", "random"]
+        assert residual_mode in [None, "regular"]
         self.residual_mode = residual_mode
+        assert classifier_mode in ["linear", "average"]
+        self.classifier_mode = classifier_mode
 
         self.do_linear_probes = not self.do_auxloss
         self.do_deep_supervision = self.do_auxloss and self.propagate_gradients
@@ -40,14 +42,66 @@ class GreedyClassifier(nn.Module):
                 nn.BatchNorm2d(256), nn.ReLU(), nn.MaxPool2d(2, 2)
             ),  # 256 x 2 x 2
         ])
-        self.classifiers = nn.ModuleList([
-            nn.Linear(32 * 16 * 16, 10),
-            nn.Linear(64 * 16 * 16, 10),
-            nn.Linear(64 * 8 * 8, 10),
-            nn.Linear(128 * 8 * 8, 10),
-            nn.Linear(128 * 4 * 4, 10),
-            nn.Linear(256 * 2 * 2, 10),
-        ])
+        if self.classifier_mode == "linear":  # linear classifiers
+            self.classifiers = nn.ModuleList([
+                nn.Sequential(
+                    nn.Flatten(),
+                    nn.Linear(32 * 16 * 16, 10),
+                ),
+                nn.Sequential(
+                    nn.Flatten(),
+                    nn.Linear(64 * 16 * 16, 10),
+                ),
+                nn.Sequential(
+                    nn.Flatten(),
+                    nn.Linear(64 * 8 * 8, 10),
+                ),
+                nn.Sequential(
+                    nn.Flatten(),
+                    nn.Linear(128 * 8 * 8, 10),
+                ),
+                nn.Sequential(
+                    nn.Flatten(),
+                    nn.Linear(128 * 4 * 4, 10),
+                ),
+                nn.Sequential(
+                    nn.Flatten(),
+                    nn.Linear(256 * 2 * 2, 10),
+                ),
+            ])
+        elif self.classifier_mode == "average":  # Use global average pooling before linear classifiers
+            self.classifiers = nn.ModuleList([
+                nn.Sequential(
+                    nn.AdaptiveAvgPool2d(1),
+                    nn.Flatten(),
+                    nn.Linear(32, 10),
+                ),
+                nn.Sequential(
+                    nn.AdaptiveAvgPool2d(1),
+                    nn.Flatten(),
+                    nn.Linear(64, 10),
+                ),
+                nn.Sequential(
+                    nn.AdaptiveAvgPool2d(1),
+                    nn.Flatten(),
+                    nn.Linear(64, 10),
+                ),
+                nn.Sequential(
+                    nn.AdaptiveAvgPool2d(1),
+                    nn.Flatten(),
+                    nn.Linear(128, 10),
+                ),
+                nn.Sequential(
+                    nn.AdaptiveAvgPool2d(1),
+                    nn.Flatten(),
+                    nn.Linear(128, 10),
+                ),
+                nn.Sequential(
+                    nn.AdaptiveAvgPool2d(1),
+                    nn.Flatten(),
+                    nn.Linear(256, 10),
+                ),
+            ])
 
         if self.residual_mode == "regular":
             self.residual_downsample_layers = nn.ModuleList([
@@ -58,7 +112,7 @@ class GreedyClassifier(nn.Module):
                 ),   # 32 x 16 x 16
                 nn.Sequential(
                     nn.Conv2d(32, 64, kernel_size=3, padding=1),
-                    nn.BatchNorm2d(64),
+                    nn.BatchNorm2d(64), nn.Identity()
                 ),  # 64 x 16 x 16
                 nn.Sequential(
                     nn.Conv2d(64, 64, kernel_size=3, padding=1),
@@ -66,7 +120,7 @@ class GreedyClassifier(nn.Module):
                 ),  # 64 x 8 x 8
                 nn.Sequential(
                     nn.Conv2d(64, 128, kernel_size=3, padding=1),
-                    nn.BatchNorm2d(128),
+                    nn.BatchNorm2d(128), nn.Identity()
                 ),  # 128 x 8 x 8
                 nn.Sequential(
                     nn.Conv2d(128, 128, kernel_size=3, padding=1),
@@ -77,30 +131,6 @@ class GreedyClassifier(nn.Module):
                     nn.BatchNorm2d(256), nn.MaxPool2d(2, 2)
                 ),  # 256 x 2 x 2
                 ])
-        elif self.residual_mode == "random":
-            self.residual_residual_projections = nn.ParameterList([
-                nn.Parameter(torch.randn(3, 32), requires_grad=False),    # From input (3) to 32 channels
-                nn.Parameter(torch.randn(32, 64), requires_grad=False),   # From 32 to 64 channels
-                nn.Parameter(torch.randn(64, 64), requires_grad=False),   # From 64 to 64 channels (no increase)
-                nn.Parameter(torch.randn(64, 128), requires_grad=False),  # From 64 to 128 channels
-                nn.Parameter(torch.randn(128, 128), requires_grad=False)  # From 128 to 256 channels
-            ])
-
-            self.activation_residual_projections = nn.ParameterList([
-                nn.Parameter(torch.randn(32, 32), requires_grad=False),    # Activation in Layer 1
-                nn.Parameter(torch.randn(64, 64), requires_grad=False),    # Activation in Layer 2 and 3
-                nn.Parameter(torch.randn(64, 64), requires_grad=False),    # Activation in Layer 3 (no change)
-                nn.Parameter(torch.randn(128, 128), requires_grad=False),  # Activation in Layer 4 and 5
-                nn.Parameter(torch.randn(128, 128), requires_grad=False)   # Activation in Layer 6
-            ])
-
-            self.residual_batchnorms = nn.ModuleList([
-                nn.BatchNorm2d(32),   # After Layer 1
-                nn.BatchNorm2d(64),   # After Layer 2
-                nn.BatchNorm2d(64),   # After Layer 3
-                nn.BatchNorm2d(128),  # After Layer 4
-                nn.BatchNorm2d(128)   # After Layer 5
-            ])
 
     def forward(self, x):
         outputs = []
@@ -121,29 +151,17 @@ class GreedyClassifier(nn.Module):
 
             x = layer(x)
 
-            x_reshaped = x.view(x.shape[0], -1)
+            x_classifier = x.clone()
             if self.do_linear_probes and i < len(self.layers) - 1:  #  Last classifier is needed in any case
-                x_reshaped = x_reshaped.detach()  # Don't propagate gradients from auxiliary classifiers (use as linear probes)
-            output = self.classifiers[i](x_reshaped)
+                x_classifier = x_classifier.detach()  # Don't propagate gradients from auxiliary classifiers (use as linear probes)
+
+            classifier = self.classifiers[i]
+            output = classifier(x_classifier)
             outputs.append(output)
 
             if self.residual_mode and i < len(self.layers) - 1:  # last layer needs to prepare no residuals
                 if self.residual_mode == "regular":
                     residual_downsample_layer = self.residual_downsample_layers[i]
                     residual = residual_downsample_layer(layer_input)
-                elif self.residual_mode == "random":
-                    pooling = None
-                    if len(layer) == 4:
-                        pooling = layer[-1]
-                    residual_residual_projection = self.residual_residual_projections[i]
-                    activation_residual_projection = self.activation_residual_projections[i]
-                    bnorm = self.residual_batchnorms[i]
-
-                    projected_residual = torch.einsum("bdwh,dc->bcwh", residual, residual_residual_projection)
-                    if pooling:
-                        projected_residual = pooling(projected_residual)
-                    projected_activation = torch.einsum("bdwh,dc->bcwh", x, activation_residual_projection)
-                    residual = projected_residual + projected_activation
-                    residual = bnorm(residual)
 
         return outputs
