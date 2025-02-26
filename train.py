@@ -271,6 +271,11 @@ def run():
     model.to(device)
     summary(model, input_size=(3, 32, 32))
 
+    final_parameters = list(model.layers.parameters()) + list(model.classifiers[-1].parameters())
+    print(f"Parameters final model: {sum(p.numel() for p in final_parameters)}")
+    auxiliary_parameters = model.classifiers[:-1].parameters()
+    print(f"Parameters axiliary classifiers/probes: {sum(p.numel() for p in auxiliary_parameters)}")
+
     optimizers = init_optimizers(model)
     criterion = nn.CrossEntropyLoss()
 
