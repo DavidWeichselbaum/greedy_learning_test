@@ -20,7 +20,8 @@ FIXED_PARAMS = {
 TEST_PARAMS = {
     "do_auxloss": [True, False],
     "propagate_gradients": [True, False],
-    "residual_mode": [None, "regular", "random"]
+    "residual_mode": [None, "regular"]
+    "classifier_mode": ["dense", "dense-s1", "average"]
 }
 TEST_PARAMS_combinations = [
     dict(zip(TEST_PARAMS.keys(), values))
@@ -31,7 +32,8 @@ TEST_PARAMS_combinations = [
 def run_test(config, repeat, project_name, test_name):
     group = f"{test_name}_{'+auxloss' if config['do_auxloss'] else '-auxloss'}" \
             f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \
-            f"_resid={config['residual_mode']}"
+            f"_resid={config['residual_mode']}" \
+            f"_classifier={config['classifier_mode']}"
     name = f"{group}_run-{repeat}"
 
     wandb.init(

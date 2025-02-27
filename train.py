@@ -292,7 +292,7 @@ if __name__ == "__main__":
         "do_auxloss": True,
         "propagate_gradients": False,
         "residual_mode": None,
-        "classifier_mode": "average",
+        "classifier_mode": "dense-s1",
     }
     name = f"test_{'+auxloss' if config['do_auxloss'] else '-auxloss'}" \
            f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \

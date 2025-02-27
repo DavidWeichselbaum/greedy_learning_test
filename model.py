@@ -1,15 +1,17 @@
+from copy import deepcopy
+
 import torch
 import torch.nn as nn
 
 
 class GreedyClassifier(nn.Module):
-    def __init__(self, do_auxloss=False, propagate_gradients=True, residual_mode=None, classifier_mode="linear"):
+    def __init__(self, do_auxloss=False, propagate_gradients=True, residual_mode=None, classifier_mode="dense-s1"):
         super(GreedyClassifier, self).__init__()
         self.do_auxloss = do_auxloss
         self.propagate_gradients = propagate_gradients
         assert residual_mode in [None, "regular"]
         self.residual_mode = residual_mode
-        assert classifier_mode in ["linear", "average"]
+        assert classifier_mode in ["dense", "dense-s1", "average"]
         self.classifier_mode = classifier_mode
 
         self.do_linear_probes = not self.do_auxloss
@@ -42,7 +44,7 @@ class GreedyClassifier(nn.Module):
                 nn.BatchNorm2d(256), nn.ReLU(), nn.MaxPool2d(2, 2)
             ),  # 256 x 2 x 2
         ])
-        if self.classifier_mode == "linear":  # linear classifiers
+        if self.classifier_mode == "dense":
             self.classifiers = nn.ModuleList([
                 nn.Sequential(
                     nn.Flatten(),
@@ -63,6 +65,38 @@ class GreedyClassifier(nn.Module):
                 nn.Sequential(
                     nn.Flatten(),
                     nn.Linear(128 * 4 * 4, 10),
+                ),
+                nn.Sequential(
+                    nn.Flatten(),
+                    nn.Linear(256 * 2 * 2, 10),
+                ),
+            ])
+        elif self.classifier_mode == "dense-s1":
+            self.classifiers = nn.ModuleList([
+                nn.Sequential(
+                    deepcopy(self.layers[1]),
+                    nn.Flatten(),
+                    nn.Linear(64 * 16 * 16, 10),
+                ),
+                nn.Sequential(
+                    deepcopy(self.layers[2]),
+                    nn.Flatten(),
+                    nn.Linear(64 * 8 * 8, 10),
+                ),
+                nn.Sequential(
+                    deepcopy(self.layers[3]),
+                    nn.Flatten(),
+                    nn.Linear(128 * 8 * 8, 10),
+                ),
+                nn.Sequential(
+                    deepcopy(self.layers[4]),
+                    nn.Flatten(),
+                    nn.Linear(128 * 4 * 4, 10),
+                ),
+                nn.Sequential(
+                    deepcopy(self.layers[5]),
+                    nn.Flatten(),
+                    nn.Linear(256 * 2 * 2, 10),
                 ),
                 nn.Sequential(
                     nn.Flatten(),
