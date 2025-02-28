@@ -5,7 +5,7 @@ import torch.nn as nn
 
 
 class GreedyClassifier(nn.Module):
-    def __init__(self, do_auxloss=False, propagate_gradients=True, residual_mode=None, classifier_mode="dense-s1"):
+    def __init__(self, do_auxloss=False, propagate_gradients=True, residual_mode=None, classifier_mode="dense", do_SGR=False):
         super(GreedyClassifier, self).__init__()
         self.do_auxloss = do_auxloss
         self.propagate_gradients = propagate_gradients
@@ -13,6 +13,8 @@ class GreedyClassifier(nn.Module):
         self.residual_mode = residual_mode
         assert classifier_mode in ["dense", "dense-s1", "average"]
         self.classifier_mode = classifier_mode
+        assert not (propagate_gradients and do_SGR), "This makes no sense"
+        self.do_SGR = do_SGR
 
         self.do_linear_probes = not self.do_auxloss
         self.do_deep_supervision = self.do_auxloss and self.propagate_gradients
@@ -167,7 +169,9 @@ class GreedyClassifier(nn.Module):
                 ])
 
     def forward(self, x):
+        inputs = []
         outputs = []
+        classifications = []
         residual = None
 
         for i, layer in enumerate(self.layers):
@@ -183,7 +187,12 @@ class GreedyClassifier(nn.Module):
                 else:
                     x = x + residual
 
+            if self.do_SGR:
+                x.requires_grad_()
+
+            inputs.append(x)
             x = layer(x)
+            outputs.append(x)
 
             x_classifier = x.clone()
             if self.do_linear_probes and i < len(self.layers) - 1:  #  Last classifier is needed in any case
@@ -191,11 +200,11 @@ class GreedyClassifier(nn.Module):
 
             classifier = self.classifiers[i]
             output = classifier(x_classifier)
-            outputs.append(output)
+            classifications.append(output)
 
             if self.residual_mode and i < len(self.layers) - 1:  # last layer needs to prepare no residuals
                 if self.residual_mode == "regular":
                     residual_downsample_layer = self.residual_downsample_layers[i]
                     residual = residual_downsample_layer(layer_input)
 
-        return outputs
+        return inputs, classifications, outputs

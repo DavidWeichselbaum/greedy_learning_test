@@ -11,8 +11,8 @@ from model import GreedyClassifier
 from utils import get_commit_hash
 
 
-def train(model, train_loader, val_loader, optimizers, criterion, device, num_epochs):
-    outputs_df = pd.DataFrame(columns=["Steps", "Output", "Val Loss", "Val Accuracy"])
+def train(model, train_loader, val_loader, optimizers, classification_criterion, SGR_criterion, device, num_epochs):
+    classification_df = pd.DataFrame(columns=["Steps", "Classifier", "Val Loss", "Val Accuracy"])
     gradients_df = pd.DataFrame(columns=["Steps", "Parameter", "Type", "Cosine Similarity", "Norm Ratio"])
     model.train()
     # wandb.watch(model, log="all")  # Log gradients and model parameters
@@ -22,23 +22,14 @@ def train(model, train_loader, val_loader, optimizers, criterion, device, num_ep
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
 
-            outputs = model(data)
+            inputs, classifications, outputs = model(data)
 
             if model.do_deep_supervision:  # global optimizer
-                optimizer = optimizers
-                optimizer.zero_grad()
-                loss = 0
-                for i, output in enumerate(outputs):
-                    loss += criterion(output, target)
-                loss /= len(outputs)
-                loss.backward()
-                optimizer.step()
-            else:  # separate optimizer for each auxiliary head or linear probe
-                for i, (output, optimizer) in enumerate(zip(outputs, optimizers)):
-                    optimizer.zero_grad()
-                    loss = criterion(output, target)
-                    loss.backward()
-                    optimizer.step()
+                loss, output = deep_supervision_step(classifications, optimizers, target, classification_criterion)
+            elif model.do_SGR:
+                loss, output = multi_optimizer_step_SGR(inputs, classifications, outputs, optimizers, target, classification_criterion, SGR_criterion)
+            else:
+                loss, output = multi_optimizer_step(inputs, classifications, optimizers, target, classification_criterion)
 
             train_loss += loss.item()  # only care about last loss
             train_accuracy += get_accuracy(output, target)  # only care about final classification performance
@@ -49,9 +40,9 @@ def train(model, train_loader, val_loader, optimizers, criterion, device, num_ep
                 train_loss /= train_accumulation_steps
                 train_accuracy /= train_accumulation_steps
 
-                val_loss, val_accuracy, outputs_df = validate(model, val_loader, criterion, device, total_steps, outputs_df)
+                val_loss, val_accuracy, classification_df = validate(model, val_loader, classification_criterion, device, total_steps, classification_df)
                 if not model.propagate_gradients:
-                    gradients_df = compare_gradients(model, val_loader, device, criterion, total_steps, gradients_df)
+                    gradients_df = compare_gradients(model, val_loader, device, classification_criterion, total_steps, gradients_df)
 
                 wandb.log({
                     "Steps": total_steps,
@@ -72,6 +63,52 @@ def train(model, train_loader, val_loader, optimizers, criterion, device, num_ep
     # wandb.save("mnist_model.pth")
 
 
+def deep_supervision_step(classifications, optimizer, target, criterion):
+    optimizer.zero_grad()
+    loss = 0
+    for i, output in enumerate(classifications):
+        loss += criterion(output, target)
+    loss /= len(classifications)
+    loss.backward()
+    optimizer.step()
+    return loss, output
+
+
+def multi_optimizer_step(inputs, classifications, optimizers, target, criterion):
+    for i, (classification, optimizer) in enumerate(zip(classifications, optimizers)):
+        optimizer.zero_grad()
+        loss = criterion(classification, target)
+        loss.backward()
+        optimizer.step()
+
+
+def multi_optimizer_step_SGR(inputs, classifications, outputs, optimizers, target, classification_criterion, SGR_criterion):
+    for i, (input_, classification, output, optimizer) in enumerate(zip(inputs, classifications, outputs, optimizers)):
+        # print(i, input_.shape, classification.shape, output.shape)
+        optimizer.zero_grad()
+        loss_cls = classification_criterion(classification, target)
+        if i >= 1:
+            delta_now = torch.autograd.grad(loss_cls, input_, retain_graph=True, create_graph=True)[0]
+            delta_now_norm = torch.flatten(delta_now, 1)
+            delta_now_norm = delta_now_norm / torch.sqrt(torch.sum(delta_now_norm ** 2, dim=1, keepdims=True))
+
+            # print(delta_now_norm.shape, delta_pre_norm.shape)
+            loss_SGR = SGR_criterion(delta_now_norm, delta_pre_norm)
+        else:
+            loss_SGR = 0.0
+
+        delta_pre = torch.autograd.grad(loss_cls, output, retain_graph=True)[0].detach()
+        delta_pre_norm = torch.flatten(delta_pre, 1)
+        delta_pre_norm = delta_pre_norm / torch.sqrt(torch.sum(delta_pre_norm ** 2, dim=1, keepdims=True))
+
+        loss = loss_cls + loss_SGR * wandb.config.SGR_weight
+        loss.backward()
+        optimizer.step()
+        # print(delta_pre.shape)
+        # print(f"{loss_cls:.2E}  {loss_SGR:.2E}  {loss:.2E}")
+    return loss, classification
+
+
 def get_accuracy(output, target):
     _, predicted = torch.max(output, dim=1)
     correct = (predicted == target).sum().item()
@@ -80,7 +117,7 @@ def get_accuracy(output, target):
     return accuracy
 
 
-def log_outputs_table(total_steps, losses, accuracies, outputs_df):
+def log_outputs_table(total_steps, losses, accuracies, classification_df):
     new_rows = []
     for output_idx, (loss, accuracy) in enumerate(zip(losses, accuracies)):
         new_row = {
@@ -91,9 +128,9 @@ def log_outputs_table(total_steps, losses, accuracies, outputs_df):
         }
         new_rows.append(new_row)
     new_df = pd.DataFrame(new_rows)
-    outputs_df = pd.concat([outputs_df, new_df], ignore_index=True)
-    wandb.log({"Classifier Head Metrics": wandb.Table(dataframe=outputs_df), "Steps": total_steps})
-    return outputs_df
+    classification_df = pd.concat([classification_df, new_df], ignore_index=True)
+    wandb.log({"Classifier Head Metrics": wandb.Table(dataframe=classification_df), "Steps": total_steps})
+    return classification_df
 
 
 def log_outputs_plot(total_steps, losses, accuracies):
@@ -112,7 +149,7 @@ def log_outputs_plot(total_steps, losses, accuracies):
         step=total_steps)
 
 
-def validate(model, val_loader, criterion, device, total_steps, outputs_df):
+def validate(model, val_loader, criterion, device, total_steps, classification_df):
     val_losses = []
     val_accuracies = []
 
@@ -120,26 +157,26 @@ def validate(model, val_loader, criterion, device, total_steps, outputs_df):
     with torch.no_grad():
         for data, target in val_loader:
             data, target = data.to(device), target.to(device)
-            outputs = model(data)
+            inputs, classifications, outputs = model(data)
 
             if not val_losses:
-                val_losses = [[] for _ in range(len(outputs))]
-                val_accuracies = [[] for _ in range(len(outputs))]
+                val_losses = [[] for _ in range(len(classifications))]
+                val_accuracies = [[] for _ in range(len(classifications))]
 
-            for i, output in enumerate(outputs):
-                loss = criterion(output, target)
+            for i, classification in enumerate(classifications):
+                loss = criterion(classification, target)
                 val_losses[i].append(loss.item())
-                val_accuracies[i].append(get_accuracy(output, target))
+                val_accuracies[i].append(get_accuracy(classification, target))
     model.train()
 
     avg_val_losses = [sum(losses) / len(losses) for losses in val_losses]
     avg_val_accuracies = [sum(accs) / len(accs) for accs in val_accuracies]
 
     if len(avg_val_losses) > 1:
-        outputs_df = log_outputs_table(total_steps, avg_val_losses, avg_val_accuracies, outputs_df)
+        classification_df = log_outputs_table(total_steps, avg_val_losses, avg_val_accuracies, classification_df)
         log_outputs_plot(total_steps, avg_val_losses, avg_val_accuracies)
 
-    return avg_val_losses[-1], avg_val_accuracies[-1], outputs_df
+    return avg_val_losses[-1], avg_val_accuracies[-1], classification_df
 
 
 def compare_gradients(model, val_loader, device, criterion, total_steps, gradients_df):
@@ -184,11 +221,11 @@ def compare_gradients(model, val_loader, device, criterion, total_steps, gradien
 
 def get_backprop_grads(model, data, target, criterion):
     model.propagate_gradients = True
-    outputs = model(data)
+    inputs, classifications, outputs = model(data)
     model.propagate_gradients = False
 
-    final_output = outputs[-1]
-    loss = criterion(final_output, target)
+    final_classification = classifications[-1]
+    loss = criterion(final_classification, target)
 
     model.zero_grad()
     loss.backward()
@@ -202,11 +239,11 @@ def get_backprop_grads(model, data, target, criterion):
 
 
 def get_no_backprop_grads(model, data, target, criterion):
-    outputs = model(data)
+    inputs, classifications, outputs = model(data)
 
     model.zero_grad()
-    for i, output in enumerate(outputs):
-        loss = criterion(output, target)
+    for i, classification in enumerate(classifications):
+        loss = criterion(classification, target)
         loss.backward()
 
     grads_no_backprop = {}
@@ -267,6 +304,7 @@ def run():
         propagate_gradients=wandb.config.propagate_gradients,
         residual_mode=wandb.config.residual_mode,
         classifier_mode=wandb.config.classifier_mode,
+        do_SGR=wandb.config.do_SGR,
     )
     model.to(device)
     summary(model, input_size=(3, 32, 32))
@@ -277,9 +315,10 @@ def run():
     print(f"Parameters axiliary classifiers/probes: {sum(p.numel() for p in auxiliary_parameters)}")
 
     optimizers = init_optimizers(model)
-    criterion = nn.CrossEntropyLoss()
+    classification_criterion = nn.CrossEntropyLoss()
+    SGR_criterion = nn.MSELoss()
 
-    train(model, train_loader, val_loader, optimizers, criterion, device, wandb.config.epochs)
+    train(model, train_loader, val_loader, optimizers, classification_criterion, SGR_criterion, device, wandb.config.epochs)
 
 
 if __name__ == "__main__":
@@ -293,11 +332,14 @@ if __name__ == "__main__":
         "propagate_gradients": False,
         "residual_mode": None,
         "classifier_mode": "dense-s1",
+        "do_SGR": True,
+        "SGR_weight": 5000,
     }
     name = f"test_{'+auxloss' if config['do_auxloss'] else '-auxloss'}" \
            f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \
            f"_resid={config['residual_mode']}" \
-           f"_classifier={config['classifier_mode']}"
+           f"_classifier={config['classifier_mode']}" \
+           f"_{'+SGR' if config['do_SGR'] else '-SGR'}"
     wandb.init(
         mode="disabled",
         project="greedy_learning_test_CIFAR10",

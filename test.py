@@ -9,19 +9,21 @@ from utils import get_commit_hash
 
 
 PROJECT_NAME = "greedy_learning_test_CIFAR10"
-TEST_NAME = "3-resid-modes"
+TEST_NAME = "SGR_test"
 N_REPEATS = 20
 FIXED_PARAMS = {
     "epochs": 100,
     "batch_size": 64,
     "learning_rate": 0.001,
     "log_steps": 500,
+    "SGR_weight": 5000,
 }
 TEST_PARAMS = {
-    "do_auxloss": [True, False],
-    "propagate_gradients": [True, False],
-    "residual_mode": [None, "regular"]
-    "classifier_mode": ["dense", "dense-s1", "average"]
+    "do_auxloss": [True],
+    "propagate_gradients": [False],
+    "residual_mode": [None]
+    "classifier_mode": ["dense", "dense-s1"]
+    "do_SGR": [True, False],
 }
 TEST_PARAMS_combinations = [
     dict(zip(TEST_PARAMS.keys(), values))
