@@ -25,14 +25,14 @@ def train(model, train_loader, val_loader, optimizers, classification_criterion,
             inputs, classifications, outputs = model(data)
 
             if model.do_deep_supervision:  # global optimizer
-                loss, output = deep_supervision_step(classifications, optimizers, target, classification_criterion)
+                loss, classification = deep_supervision_step(classifications, optimizers, target, classification_criterion)
             elif model.do_SGR:
-                loss, output = multi_optimizer_step_SGR(inputs, classifications, outputs, optimizers, target, classification_criterion, SGR_criterion)
+                loss, classification = multi_optimizer_step_SGR(inputs, classifications, outputs, optimizers, target, classification_criterion, SGR_criterion)
             else:
-                loss, output = multi_optimizer_step(inputs, classifications, optimizers, target, classification_criterion)
+                loss, classification = multi_optimizer_step(inputs, classifications, optimizers, target, classification_criterion)
 
             train_loss += loss.item()  # only care about last loss
-            train_accuracy += get_accuracy(output, target)  # only care about final classification performance
+            train_accuracy += get_accuracy(classification, target)  # only care about final classification performance
 
             total_steps = epoch * len(train_loader) + batch_idx
             train_accumulation_steps += 1
@@ -66,12 +66,12 @@ def train(model, train_loader, val_loader, optimizers, classification_criterion,
 def deep_supervision_step(classifications, optimizer, target, criterion):
     optimizer.zero_grad()
     loss = 0
-    for i, output in enumerate(classifications):
-        loss += criterion(output, target)
+    for i, classification in enumerate(classifications):
+        loss += criterion(classification, target)
     loss /= len(classifications)
     loss.backward()
     optimizer.step()
-    return loss, output
+    return loss, classification
 
 
 def multi_optimizer_step(inputs, classifications, optimizers, target, criterion):
@@ -80,6 +80,7 @@ def multi_optimizer_step(inputs, classifications, optimizers, target, criterion)
         loss = criterion(classification, target)
         loss.backward()
         optimizer.step()
+    return loss, classification
 
 
 def multi_optimizer_step_SGR(inputs, classifications, outputs, optimizers, target, classification_criterion, SGR_criterion):
@@ -109,20 +110,20 @@ def multi_optimizer_step_SGR(inputs, classifications, outputs, optimizers, targe
     return loss, classification
 
 
-def get_accuracy(output, target):
-    _, predicted = torch.max(output, dim=1)
+def get_accuracy(classification, target):
+    _, predicted = torch.max(classification, dim=1)
     correct = (predicted == target).sum().item()
     total = target.size(0)
     accuracy = correct / total
     return accuracy
 
 
-def log_outputs_table(total_steps, losses, accuracies, classification_df):
+def log_classifier_table(total_steps, losses, accuracies, classification_df):
     new_rows = []
-    for output_idx, (loss, accuracy) in enumerate(zip(losses, accuracies)):
+    for classifier_idx, (loss, accuracy) in enumerate(zip(losses, accuracies)):
         new_row = {
             "Steps": total_steps,
-            "Output": output_idx,
+            "Classifier": classifier_idx,
             "Val Loss": loss,
             "Val Accuracy": accuracy
         }
@@ -133,16 +134,16 @@ def log_outputs_table(total_steps, losses, accuracies, classification_df):
     return classification_df
 
 
-def log_outputs_plot(total_steps, losses, accuracies):
-    output_labels = [f"Output {i+1}" for i in range(len(losses))]
+def log_classifier_plot(total_steps, losses, accuracies):
+    classifier_label = [f"Classifier {i+1}" for i in range(len(losses))]
 
-    losses_data = [[label, loss] for label, loss in zip(output_labels, losses)]
-    losses_table = wandb.Table(data=losses_data, columns=["Output", "Loss"])
-    losses_plot = wandb.plot.bar(losses_table, "Output", "Loss", title="Validation Losses for Each Output")
+    losses_data = [[label, loss] for label, loss in zip(classifier_label, losses)]
+    losses_table = wandb.Table(data=losses_data, columns=["Classifier", "Loss"])
+    losses_plot = wandb.plot.bar(losses_table, "Classifier", "Loss", title="Validation Losses for Each Classifier")
 
-    accuracies_data = [[label, acc] for label, acc in zip(output_labels, accuracies)]
-    accuracies_table = wandb.Table(data=accuracies_data, columns=["Output", "Accuracy"])
-    accuracies_plot = wandb.plot.bar(accuracies_table, "Output", "Accuracy", title="Validation Accuracies for Each Output")
+    accuracies_data = [[label, acc] for label, acc in zip(classifier_label, accuracies)]
+    accuracies_table = wandb.Table(data=accuracies_data, columns=["Classifier", "Accuracy"])
+    accuracies_plot = wandb.plot.bar(accuracies_table, "Classifier", "Accuracy", title="Validation Accuracies for Each Classifier")
 
     wandb.log(
         {"Validation Accuracies": accuracies_plot, "Validation Losses": losses_plot},
@@ -173,8 +174,8 @@ def validate(model, val_loader, criterion, device, total_steps, classification_d
     avg_val_accuracies = [sum(accs) / len(accs) for accs in val_accuracies]
 
     if len(avg_val_losses) > 1:
-        classification_df = log_outputs_table(total_steps, avg_val_losses, avg_val_accuracies, classification_df)
-        log_outputs_plot(total_steps, avg_val_losses, avg_val_accuracies)
+        classification_df = log_classifier_table(total_steps, avg_val_losses, avg_val_accuracies, classification_df)
+        log_classifier_plot(total_steps, avg_val_losses, avg_val_accuracies)
 
     return avg_val_losses[-1], avg_val_accuracies[-1], classification_df
 
@@ -333,7 +334,7 @@ if __name__ == "__main__":
         "residual_mode": None,
         "classifier_mode": "dense-s1",
         "do_SGR": True,
-        "SGR_weight": 5000,
+        "SGR_weight": 1000,
     }
     name = f"test_{'+auxloss' if config['do_auxloss'] else '-auxloss'}" \
            f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \
