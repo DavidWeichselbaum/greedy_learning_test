@@ -24,10 +24,11 @@ def train(model, train_loader, val_loader, optimizers, classification_criterion,
 
             inputs, classifications, outputs = model(data)
 
+            loss_SGR = 0
             if model.do_deep_supervision:  # global optimizer
                 loss, classification = deep_supervision_step(classifications, optimizers, target, classification_criterion)
             elif model.do_SGR:
-                loss, classification = multi_optimizer_step_SGR(inputs, classifications, outputs, optimizers, target, classification_criterion, SGR_criterion)
+                loss, loss_SGR, classification = multi_optimizer_step_SGR(inputs, classifications, outputs, optimizers, target, classification_criterion, SGR_criterion)
             else:
                 loss, classification = multi_optimizer_step(inputs, classifications, optimizers, target, classification_criterion)
 
@@ -49,12 +50,13 @@ def train(model, train_loader, val_loader, optimizers, classification_criterion,
                     "Epoch": epoch + 1,
                     "Batch": batch_idx,
                     "Train Loss": train_loss,
+                    "Train Loss SGR": loss_SGR,
                     "Val Loss": val_loss,
                     "Train Accuracy": train_accuracy,
                     "Val Accuracy": val_accuracy,
                 })
                 print(f"Epoch {epoch+1}, Step {total_steps},"
-                      f" Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f},"
+                      f" Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Train Loss SGR: {loss_SGR:.4e},"
                       f" Train Accuracy: {train_accuracy:.4f}, Val Accuracy: {val_accuracy:.4f}")
                 train_loss, train_accuracy, train_accumulation_steps = 0, 0, 0
 
@@ -85,7 +87,6 @@ def multi_optimizer_step(inputs, classifications, optimizers, target, criterion)
 
 def multi_optimizer_step_SGR(inputs, classifications, outputs, optimizers, target, classification_criterion, SGR_criterion):
     for i, (input_, classification, output, optimizer) in enumerate(zip(inputs, classifications, outputs, optimizers)):
-        # print(i, input_.shape, classification.shape, output.shape)
         optimizer.zero_grad()
         loss_cls = classification_criterion(classification, target)
         if i >= 1:
@@ -93,7 +94,6 @@ def multi_optimizer_step_SGR(inputs, classifications, outputs, optimizers, targe
             delta_now_norm = torch.flatten(delta_now, 1)
             delta_now_norm = delta_now_norm / torch.sqrt(torch.sum(delta_now_norm ** 2, dim=1, keepdims=True))
 
-            # print(delta_now_norm.shape, delta_pre_norm.shape)
             loss_SGR = SGR_criterion(delta_now_norm, delta_pre_norm)
         else:
             loss_SGR = 0.0
@@ -105,9 +105,7 @@ def multi_optimizer_step_SGR(inputs, classifications, outputs, optimizers, targe
         loss = loss_cls + loss_SGR * wandb.config.SGR_weight
         loss.backward()
         optimizer.step()
-        # print(delta_pre.shape)
-        # print(f"{loss_cls:.2E}  {loss_SGR:.2E}  {loss:.2E}")
-    return loss, classification
+    return loss_cls, loss_SGR, classification
 
 
 def get_accuracy(classification, target):
