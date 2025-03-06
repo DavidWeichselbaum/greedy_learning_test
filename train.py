@@ -20,6 +20,10 @@ def train(model, train_loader, val_loader, optimizers, criterion, device, num_ep
     train_loss, train_accuracy, train_accumulation_steps = 0, 0, 0
     for epoch in range(num_epochs):
         for batch_idx, (data, target) in enumerate(train_loader):
+            total_steps = epoch * len(train_loader) + batch_idx
+            if total_steps % wandb.config.merge_steps == 0:
+                model.merge_weights()
+
             data, target = data.to(device), target.to(device)
 
             outputs = model(data)
@@ -43,7 +47,6 @@ def train(model, train_loader, val_loader, optimizers, criterion, device, num_ep
             train_loss += loss.item()  # only care about last loss
             train_accuracy += get_accuracy(output, target)  # only care about final classification performance
 
-            total_steps = epoch * len(train_loader) + batch_idx
             train_accumulation_steps += 1
             if total_steps % wandb.config.log_steps == 0:
                 train_loss /= train_accumulation_steps
@@ -295,12 +298,14 @@ if __name__ == "__main__":
         "residual_mode": None,
         "classifier_mode": "dense",
         "surrogate_depth": 1,
+        "merge_steps": 10,
     }
     name = f"test_{'+auxloss' if config['do_auxloss'] else '-auxloss'}" \
            f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \
            f"_resid={config['residual_mode']}" \
            f"_classifier={config['classifier_mode']}" \
-           f"_surrogate={config['surrogate_depth']}"
+           f"_surrogate={config['surrogate_depth']}" \
+           f"_mergeSteps={config['merge_steps']}"
     wandb.init(
         mode="disabled",
         project="greedy_learning_test_CIFAR10",

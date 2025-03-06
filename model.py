@@ -62,9 +62,10 @@ class GreedyClassifier(nn.Module):
 
                 surrogate_layers = deepcopy(self.layers[i+1:i+1+current_surrogate_depth])
                 classifier = deepcopy(self.classifiers[i+current_surrogate_depth])
-                surrogated_classifiers.append(nn.Sequential(*surrogate_layers, *classifier))
+                surrogated_classifiers.append(nn.Sequential(*surrogate_layers, classifier))
 
             self.classifiers = surrogated_classifiers
+        print(self.classifiers)
 
         # if self.residual_mode == "regular":
         #     self.residual_downsample_layers = nn.ModuleList([
@@ -128,3 +129,18 @@ class GreedyClassifier(nn.Module):
                     residual = residual_downsample_layer(layer_input)
 
         return outputs
+
+    def merge_weights(self):
+        if not self.surrogate_depth:
+            return
+        for i in range(len(self.layers)):
+            remaining_depth = len(self.layers) - (i+1)
+            current_surrogate_depth = min(remaining_depth, self.surrogate_depth)
+
+            layers = self.layers[i+1:i+1+current_surrogate_depth]
+
+            classifier = self.classifiers[i]
+            surrogate_layers = classifier[:-1]  # last module is classifier head, others are surrogate layers
+
+            for layer, surrogate_layer in zip(layers, surrogate_layers):
+                surrogate_layer.load_state_dict(layer.state_dict())
