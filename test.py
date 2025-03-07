@@ -9,7 +9,7 @@ from utils import get_commit_hash
 
 
 PROJECT_NAME = "greedy_learning_test_CIFAR10"
-TEST_NAME = "merging_SGD"
+TEST_NAME = "merging_weight"
 N_REPEATS = 20
 FIXED_PARAMS = {
     "epochs": 50,
@@ -21,9 +21,10 @@ FIXED_PARAMS = {
     "residual_mode": None,
     "classifier_mode": "dense",
     "surrogate_depth": 1,
+    "merge_steps": 100,
 }
 TEST_PARAMS = {
-    "merge_steps": [1000, 100, 10, 1],
+    "merge_weight": [0.01, 0.1, 0.5, 0.9, 0.99],
 }
 TEST_PARAMS_combinations = [
     dict(zip(TEST_PARAMS.keys(), values))
@@ -35,7 +36,8 @@ def run_test(config, repeat, project_name, test_name):
     group = f"{test_name}_{'+auxloss' if config['do_auxloss'] else '-auxloss'}" \
             f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \
             f"_surrogate={config['surrogate_depth']}" \
-            f"_mergeSteps={config['merge_steps']}"
+            f"_mergeSteps={config['merge_steps']}" \
+            f"_mergeWeight={config['merge_weight']}"
     name = f"{group}_run-{repeat}"
 
     wandb.init(

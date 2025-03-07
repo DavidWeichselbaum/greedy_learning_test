@@ -5,7 +5,7 @@ import torch.nn as nn
 
 class GreedyClassifier(nn.Module):
     def __init__(self, do_auxloss=False, propagate_gradients=True, residual_mode=None,
-                 classifier_mode="dense", surrogate_depth=0):
+                 classifier_mode="dense", surrogate_depth=0, merge_weight=0.5):
         super(GreedyClassifier, self).__init__()
         self.do_auxloss = do_auxloss
         self.propagate_gradients = propagate_gradients
@@ -15,6 +15,7 @@ class GreedyClassifier(nn.Module):
         self.classifier_mode = classifier_mode
         assert surrogate_depth >= 0
         self.surrogate_depth = surrogate_depth
+        self.merge_weight = merge_weight
 
         self.do_linear_probes = not self.do_auxloss
         self.do_deep_supervision = self.do_auxloss and self.propagate_gradients
@@ -142,4 +143,14 @@ class GreedyClassifier(nn.Module):
             surrogate_layers = classifier[:-1]  # last module is classifier head, others are surrogate layers
 
             for layer, surrogate_layer in zip(layers, surrogate_layers):
-                surrogate_layer.load_state_dict(layer.state_dict())
+                # surrogate_layer.load_state_dict(layer.state_dict())
+
+                layer_states = layer.state_dict()
+                surrogate_states = surrogate_layer.state_dict()
+                merged_states = {}
+                for key in layer_states:
+                    layer_state = layer_states[key] * self.merge_weight
+                    surragate_state = surrogate_states[key] * (1 - self.merge_weight)
+                    merged_states[key] = layer_state + surragate_state
+
+                surrogate_layer.load_state_dict(merged_states)

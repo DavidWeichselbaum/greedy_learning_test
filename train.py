@@ -271,6 +271,7 @@ def run():
         residual_mode=wandb.config.residual_mode,
         classifier_mode=wandb.config.classifier_mode,
         surrogate_depth=wandb.config.surrogate_depth,
+        merge_weight=wandb.config.merge_weight,
     )
     model.to(device)
     summary(model, input_size=(3, 32, 32))
@@ -299,13 +300,15 @@ if __name__ == "__main__":
         "classifier_mode": "dense",
         "surrogate_depth": 1,
         "merge_steps": 10,
+        "merge_weight": 0.5,
     }
     name = f"test_{'+auxloss' if config['do_auxloss'] else '-auxloss'}" \
            f"_{'+gradients' if config['propagate_gradients'] else '-gradients'}" \
            f"_resid={config['residual_mode']}" \
            f"_classifier={config['classifier_mode']}" \
            f"_surrogate={config['surrogate_depth']}" \
-           f"_mergeSteps={config['merge_steps']}"
+           f"_mergeSteps={config['merge_steps']}" \
+           f"_mergeWeight={config['merge_weight']}"
     wandb.init(
         mode="disabled",
         project="greedy_learning_test_CIFAR10",
