@@ -1,11 +1,11 @@
 from copy import deepcopy
 
-import torch
 import torch.nn as nn
 
 
 class GreedyClassifier(nn.Module):
-    def __init__(self, do_auxloss=False, propagate_gradients=True, residual_mode=None, classifier_mode="dense", surrogate_depth=0):
+    def __init__(self, do_auxloss=False, propagate_gradients=True, residual_mode=None,
+                 classifier_mode="dense", surrogate_depth=0):
         super(GreedyClassifier, self).__init__()
         self.do_auxloss = do_auxloss
         self.propagate_gradients = propagate_gradients
@@ -65,7 +65,6 @@ class GreedyClassifier(nn.Module):
                 surrogated_classifiers.append(nn.Sequential(*surrogate_layers, classifier))
 
             self.classifiers = surrogated_classifiers
-        print(self.classifiers)
 
         # if self.residual_mode == "regular":
         #     self.residual_downsample_layers = nn.ModuleList([
